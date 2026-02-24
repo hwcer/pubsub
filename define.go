@@ -1,41 +1,51 @@
 package pubsub
 
+import "errors"
+
+var (
+	ErrClientOnly         = errors.New("this operation is only available for clients")
+	ErrServerOnly         = errors.New("this operation is only available for servers")
+	ErrNotInitialized     = errors.New("client not initialized with NetHub")
+	ErrAlreadyInitialized = errors.New("pubsub already initialized, cannot change mode")
+)
+
 const (
 	BasePath           = "/pubsub"
-	PathHandshake      = BasePath + "/handshake"
 	PathSubscribe      = BasePath + "/subscribe"
-	PathQueueSubscribe = BasePath + "/queue_subscribe"
+	PathBatchSubscribe = BasePath + "/batch_subscribe"
 	PathUnsubscribe    = BasePath + "/unsubscribe"
 	PathPublish        = BasePath + "/publish"
 	PathMessage        = BasePath + "/message"
-	PathSubscribeList  = BasePath + "/subscribe_list"
 )
 
-// ServerInfo 服务器信息
-type ServerInfo struct {
-	Address      string   `json:"address"`       // 服务器地址
-	OtherServers []string `json:"other_servers"` // 其他活动的服务器列表
-}
-
-// MessageData 消息数据
-type MessageData struct {
+// Message 消息
+type Message struct {
 	Topic   string      `json:"topic"`   // 主题
-	Message interface{} `json:"message"` // 消息内容
+	Payload interface{} `json:"payload"` // 消息内容
 }
 
-// SubscribeListData 订阅列表数据
-type SubscribeListData struct {
+// Subscription 订阅请求
+type Subscription struct {
+	Topic string `json:"topic"` // 主题
+}
+
+// Unsubscription 取消订阅请求
+type Unsubscription struct {
 	Topics []string `json:"topics"` // 主题列表
 }
 
-// ConnectionInfo 连接信息
-// 存储在socket.Data中，包含订阅信息和服务器地址信息
-type ConnectionInfo struct {
-	Address            string            `json:"address"`             // 服务器地址（如果是服务器的话）
-	Subscriptions      []string          `json:"subscriptions"`       // 普通订阅列表
-	QueueSubscriptions map[string]string `json:"queue_subscriptions"` // 队列订阅列表
+// Publication 发布请求
+type Publication struct {
+	Topic   string      `json:"topic"`   // 主题
+	Payload interface{} `json:"payload"` // 消息内容
 }
 
-func (c *ConnectionInfo) IsServer() bool {
-	return c.Address != ""
+// BatchSubscription 批量订阅请求
+type BatchSubscription struct {
+	Topics []string `json:"topics"` // 主题列表
 }
+
+// socket.Data 存储的 key 常量
+const (
+	SocketDataKeySubscriptions = "subscriptions" // 订阅列表
+)

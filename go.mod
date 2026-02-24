@@ -2,7 +2,10 @@ module github.com/hwcer/pubsub
 
 go 1.25.0
 
-require github.com/hwcer/cosnet v1.4.1-0.20260213035821-cfb4aa423d5a
+require (
+	github.com/hwcer/cosgo v1.7.1
+	github.com/hwcer/cosnet v1.4.1-0.20260224083621-7e74b8b54fc0
+)
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -12,7 +15,6 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hwcer/cosgo v1.7.1 // indirect
 	github.com/hwcer/logger v0.2.8 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
@@ -33,7 +35,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a // indirect
+	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

@@ -244,6 +244,11 @@ func (ps *PubSub) sendToRemote(path string, data any) {
 }
 
 func (ps *PubSub) serialize(c *cosnet.Context, reply any) ([]byte, error) {
-	r := values.Parse(reply)
+	var r any
+	if err, ok := reply.(error); ok {
+		r = values.Error(err)
+	} else {
+		r = values.Parse(reply)
+	}
 	return json.Marshal(r)
 }

@@ -1,12 +1,14 @@
 package pubsub
 
-import "errors"
+import (
+	"github.com/hwcer/cosgo/values"
+)
 
 var (
-	ErrClientOnly         = errors.New("this operation is only available for clients")
-	ErrServerOnly         = errors.New("this operation is only available for servers")
-	ErrNotInitialized     = errors.New("client not initialized with NetHub")
-	ErrAlreadyInitialized = errors.New("pubsub already initialized, cannot change mode")
+	ErrClientOnly         = values.Error("this operation is only available for clients")
+	ErrServerOnly         = values.Error("this operation is only available for servers")
+	ErrNotInitialized     = values.Error("client not initialized with NetHub")
+	ErrAlreadyInitialized = values.Error("pubsub already initialized, cannot change mode")
 )
 
 // socket.Data 存储的 key 常量

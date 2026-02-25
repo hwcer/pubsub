@@ -1,8 +1,6 @@
 package pubsub
 
 import (
-	"errors"
-
 	"github.com/hwcer/cosnet"
 )
 
@@ -31,15 +29,10 @@ func (h *serverHandler) setSubscriptions(c *cosnet.Context, subs []string) {
 }
 
 // BatchSubscribe 处理客户端的批量订阅请求
-func (h *serverHandler) BatchSubscribe(c *cosnet.Context) interface{} {
+func (h *serverHandler) BatchSubscribe(c *cosnet.Context) any {
 	var data BatchSubscription
 	if err := c.Bind(&data); err != nil {
 		return err
-	}
-
-	socketData := c.Socket.Data()
-	if socketData == nil {
-		return errors.New("socket data not initialized")
 	}
 
 	// 获取现有订阅
@@ -61,15 +54,11 @@ func (h *serverHandler) BatchSubscribe(c *cosnet.Context) interface{} {
 
 	h.setSubscriptions(c, existingSubs)
 
-	return map[string]interface{}{
-		"code":    "batch_subscribed",
-		"message": "批量订阅成功",
-		"count":   added,
-	}
+	return nil
 }
 
 // Subscribe 处理客户端的订阅请求
-func (h *serverHandler) Subscribe(c *cosnet.Context) interface{} {
+func (h *serverHandler) Subscribe(c *cosnet.Context) any {
 	var data Subscription
 	if err := c.Bind(&data); err != nil {
 		return err
@@ -77,7 +66,7 @@ func (h *serverHandler) Subscribe(c *cosnet.Context) interface{} {
 
 	socketData := c.Socket.Data()
 	if socketData == nil {
-		return errors.New("socket data not initialized")
+		return ErrNotInitialized
 	}
 
 	// 获取现有订阅
@@ -86,21 +75,18 @@ func (h *serverHandler) Subscribe(c *cosnet.Context) interface{} {
 	// 检查是否已经订阅
 	for _, sub := range subs {
 		if sub == data.Topic {
-			return errors.New("already subscribed")
+			return false
 		}
 	}
 
 	subs = append(subs, data.Topic)
 	h.setSubscriptions(c, subs)
 
-	return map[string]interface{}{
-		"code":    "subscribed",
-		"message": "订阅成功",
-	}
+	return true
 }
 
 // Unsubscribe 处理客户端的取消订阅请求
-func (h *serverHandler) Unsubscribe(c *cosnet.Context) interface{} {
+func (h *serverHandler) Unsubscribe(c *cosnet.Context) any {
 	var data Unsubscription
 	if err := c.Bind(&data); err != nil {
 		return err
@@ -125,14 +111,11 @@ func (h *serverHandler) Unsubscribe(c *cosnet.Context) interface{} {
 		h.setSubscriptions(c, newSubs)
 	}
 
-	return map[string]interface{}{
-		"code":    "unsubscribed",
-		"message": "取消订阅成功",
-	}
+	return nil
 }
 
 // Publish 处理客户端的发布请求
-func (h *serverHandler) Publish(c *cosnet.Context) interface{} {
+func (h *serverHandler) Publish(c *cosnet.Context) any {
 	var data Publication
 	if err := c.Bind(&data); err != nil {
 		return err
@@ -165,10 +148,7 @@ func (h *serverHandler) Publish(c *cosnet.Context) interface{} {
 		return true
 	})
 
-	return map[string]interface{}{
-		"code":    "published",
-		"message": "发布成功",
-	}
+	return nil
 }
 
 // Heartbeat 处理客户端的心跳请求

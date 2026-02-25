@@ -21,12 +21,16 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/hwcer/cosgo v1.7.1 h1:oNbmNIV/5CRSC8ne6ahSoXEa/mh/G4T6btxKKvF7d1o=
 github.com/hwcer/cosgo v1.7.1/go.mod h1:UK0P445RT0JPtgy1UDt8VGDU4zYE/yS6a6nlTA2vcWA=
+github.com/hwcer/cosgo v1.7.2-0.20260225025403-cac7fe02996e h1:w00xWgPONF1tS+t366ab1/79JR8Znzifbfe41vRYHoU=
+github.com/hwcer/cosgo v1.7.2-0.20260225025403-cac7fe02996e/go.mod h1:UK0P445RT0JPtgy1UDt8VGDU4zYE/yS6a6nlTA2vcWA=
 github.com/hwcer/cosnet v1.4.0 h1:FjsPP5+SptqmoCWn/ye3XErNtTl8KPWXrYklhlgQaV0=
 github.com/hwcer/cosnet v1.4.0/go.mod h1:OIbyHwpqUafnKroqB6GtYaq50FbmXHL1Z5NyHS1tJx8=
 github.com/hwcer/cosnet v1.4.1-0.20260224083621-7e74b8b54fc0 h1:0t9tqVPL5o0KKbRuxjSqaZUoY6qPv4WPalEa4/DYE50=
 github.com/hwcer/cosnet v1.4.1-0.20260224083621-7e74b8b54fc0/go.mod h1:OIbyHwpqUafnKroqB6GtYaq50FbmXHL1Z5NyHS1tJx8=
 github.com/hwcer/cosnet v1.4.1-0.20260225020019-46ad43d3b890 h1:819D70J60t00M7QIVn0RC069cVSEeoMd7tMQPr4/3SQ=
 github.com/hwcer/cosnet v1.4.1-0.20260225020019-46ad43d3b890/go.mod h1:OIbyHwpqUafnKroqB6GtYaq50FbmXHL1Z5NyHS1tJx8=
+github.com/hwcer/cosnet v1.4.1-0.20260225025701-0c87d3261d06 h1:QDOzbAtwlSw+Mfm7rNtHZjizRD2/W7Wkt5HgyTZlW04=
+github.com/hwcer/cosnet v1.4.1-0.20260225025701-0c87d3261d06/go.mod h1:2S8p7YzGGWpLOGD8Kl3pwK7RNxXPd5fltVVcAMPBK2k=
 github.com/hwcer/logger v0.2.8 h1:TjXr/MDNuMcM+kGADa0MnviY1fs9lSwb62cQOEeros8=
 github.com/hwcer/logger v0.2.8/go.mod h1:NGF7QlsEFiTKJv0NO0XAJ4jlT7I8OdAGiT2SY2+Y6E4=
 github.com/klauspost/compress v1.18.4 h1:RPhnKRAQ4Fh8zU2FY/6ZFDwTVTxgJ/EMydqSTzE9a2c=

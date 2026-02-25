@@ -171,6 +171,14 @@ func (h *serverHandler) Publish(c *cosnet.Context) interface{} {
 	}
 }
 
+// Heartbeat 处理客户端的心跳请求
+// 服务器直接返回 nil 表示正常响应
+func (h *serverHandler) Heartbeat(c *cosnet.Context) interface{} {
+	// 服务器收到心跳，直接返回 nil 表示正常响应
+	// 可以在这里更新客户端活跃时间等
+	return nil
+}
+
 // clientHandler 客户端的处理器，接收服务器转发的消息
 type clientHandler struct {
 	pb *PubSub
@@ -190,4 +198,13 @@ func (h *clientHandler) Message(c *cosnet.Context) interface{} {
 		"code":    "received",
 		"message": "消息接收成功",
 	}
+}
+
+// Heartbeat 处理服务器的心跳响应
+// 客户端可以不做任何处理，但保留此方法用于扩展
+func (h *clientHandler) Heartbeat(c *cosnet.Context) interface{} {
+	// 客户端收到服务器的心跳响应
+	// 可以在这里处理心跳超时逻辑、重连等
+	// 目前不需要做任何处理
+	return nil
 }

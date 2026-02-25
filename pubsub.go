@@ -1,11 +1,15 @@
 package pubsub
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 
 	"github.com/hwcer/cosgo/session"
+	"github.com/hwcer/cosgo/values"
 	"github.com/hwcer/cosnet"
+	"github.com/hwcer/cosnet/listener"
+	"github.com/hwcer/cosnet/message"
 )
 
 // Mode 工作模式类型
@@ -26,7 +30,7 @@ type LocalSubscription struct {
 // PubSub 订阅发布系统
 type PubSub struct {
 	mode          Mode         // 工作模式
-	subMu         sync.RWMutex // 保护 subscriptions 的读写锁
+	mutex         sync.RWMutex // 保护 subscriptions 的读写锁
 	sockets       *cosnet.Sockets
 	subscriptions map[string]*LocalSubscription // 订阅列表，按主题分组
 }
@@ -34,14 +38,20 @@ type PubSub struct {
 // New 创建一个新的PubSub实例（通用）
 func New() *PubSub {
 	ps := &PubSub{
-		sockets:       cosnet.New(10),
+		sockets:       cosnet.New(),
 		mode:          ModeNone,
 		subscriptions: make(map[string]*LocalSubscription),
 	}
-
+	handler := ps.sockets.Handler()
+	handler.SetSerialize(ps.serialize)
 	// 注册连接建立事件，自动认证和同步订阅
 	ps.sockets.On(cosnet.EventTypeConnected, func(socket *cosnet.Socket, _ any) {
 		ps.onConnected(socket)
+	})
+
+	// 注册心跳事件
+	ps.sockets.On(cosnet.EventTypeHeartbeat, func(socket *cosnet.Socket, msg any) {
+		ps.onHeartbeat(socket, msg)
 	})
 
 	return ps
@@ -122,10 +132,20 @@ func (ps *PubSub) onConnected(socket *cosnet.Socket) {
 	}
 }
 
+// onHeartbeat 心跳事件处理
+// 客户端：发送心跳信息给服务器
+// 服务器：响应客户端的心跳
+func (ps *PubSub) onHeartbeat(socket *cosnet.Socket, _ any) {
+	if socket.Type() == listener.SocketTypeClient {
+		flag := message.FlagIsHeartbeat + message.FlagNeedACK
+		socket.Send(flag, 0, PathHeartbeat, nil)
+	}
+}
+
 // syncSubscriptionsToRemote 将本地订阅同步到远程服务器（批量）
 func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
-	ps.subMu.RLock()
-	defer ps.subMu.RUnlock()
+	ps.mutex.RLock()
+	defer ps.mutex.RUnlock()
 
 	if len(ps.subscriptions) == 0 {
 		return
@@ -139,7 +159,8 @@ func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
 
 	// 批量发送订阅
 	if len(topics) > 0 {
-		socket.Send(0, 0, PathBatchSubscribe, BatchSubscription{Topics: topics})
+		flag := message.FlagNeedACK
+		socket.Send(flag, 0, PathBatchSubscribe, BatchSubscription{Topics: topics})
 	}
 }
 
@@ -157,10 +178,10 @@ func (ps *PubSub) getOrCreateSubscription(topic string) *LocalSubscription {
 // Subscribe 订阅主题
 func (ps *PubSub) Subscribe(topic string, handler func(topic string, msg interface{})) {
 	// 获取或创建订阅，添加handler（在锁保护下完成）
-	ps.subMu.Lock()
+	ps.mutex.Lock()
 	sub := ps.getOrCreateSubscription(topic)
 	sub.Handlers = append(sub.Handlers, handler)
-	ps.subMu.Unlock()
+	ps.mutex.Unlock()
 
 	// 如果是客户端，向服务器发送订阅请求
 	ps.sendToRemote(PathSubscribe, Subscription{Topic: topic})
@@ -168,9 +189,9 @@ func (ps *PubSub) Subscribe(topic string, handler func(topic string, msg interfa
 
 // Unsubscribe 取消订阅主题
 func (ps *PubSub) Unsubscribe(topic string) {
-	ps.subMu.Lock()
+	ps.mutex.Lock()
 	delete(ps.subscriptions, topic)
-	ps.subMu.Unlock()
+	ps.mutex.Unlock()
 
 	// 如果是客户端，向服务器发送取消订阅请求
 	ps.sendToRemote(PathUnsubscribe, Unsubscription{Topics: []string{topic}})
@@ -180,17 +201,17 @@ func (ps *PubSub) Unsubscribe(topic string) {
 // 清空本地订阅，如果是客户端则通知远程服务器
 func (ps *PubSub) UnsubscribeAll() {
 	// 获取所有本地订阅主题
-	ps.subMu.RLock()
+	ps.mutex.RLock()
 	topics := make([]string, 0, len(ps.subscriptions))
 	for topic := range ps.subscriptions {
 		topics = append(topics, topic)
 	}
-	ps.subMu.RUnlock()
+	ps.mutex.RUnlock()
 
 	// 清空本地订阅
-	ps.subMu.Lock()
+	ps.mutex.Lock()
 	ps.subscriptions = make(map[string]*LocalSubscription)
-	ps.subMu.Unlock()
+	ps.mutex.Unlock()
 
 	// 如果是客户端，通知远程服务器取消所有订阅
 	if len(topics) > 0 {
@@ -199,7 +220,7 @@ func (ps *PubSub) UnsubscribeAll() {
 }
 
 // Publish 发布消息到主题
-func (ps *PubSub) Publish(topic string, msg interface{}) {
+func (ps *PubSub) Publish(topic string, msg any) {
 	// 处理本地订阅
 	ps.processSubscriptions(topic, msg)
 
@@ -211,12 +232,18 @@ func (ps *PubSub) Publish(topic string, msg interface{}) {
 }
 
 // sendToRemote 向远程服务器发送消息（仅客户端模式）
-func (ps *PubSub) sendToRemote(path string, data interface{}) {
-	if !ps.Is(ModeClient) || ps.sockets == nil {
+func (ps *PubSub) sendToRemote(path string, data any) {
+	if !ps.Is(ModeClient) {
 		return
 	}
 	ps.sockets.Range(func(socket *cosnet.Socket) bool {
-		socket.Send(0, 0, path, data)
+		flag := message.FlagNeedACK
+		socket.Send(flag, 0, path, data)
 		return true
 	})
+}
+
+func (ps *PubSub) serialize(c *cosnet.Context, reply any) ([]byte, error) {
+	r := values.Parse(reply)
+	return json.Marshal(r)
 }

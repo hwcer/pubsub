@@ -9,6 +9,11 @@ var (
 	ErrAlreadyInitialized = errors.New("pubsub already initialized, cannot change mode")
 )
 
+// socket.Data 存储的 key 常量
+const (
+	SocketDataKeySubscriptions = "subscriptions" // 订阅列表
+)
+
 const (
 	BasePath           = "/pubsub"
 	PathSubscribe      = BasePath + "/subscribe"
@@ -16,6 +21,7 @@ const (
 	PathUnsubscribe    = BasePath + "/unsubscribe"
 	PathPublish        = BasePath + "/publish"
 	PathMessage        = BasePath + "/message"
+	PathHeartbeat      = BasePath + "/heartbeat"
 )
 
 // Message 消息
@@ -44,8 +50,3 @@ type Publication struct {
 type BatchSubscription struct {
 	Topics []string `json:"topics"` // 主题列表
 }
-
-// socket.Data 存储的 key 常量
-const (
-	SocketDataKeySubscriptions = "subscriptions" // 订阅列表
-)

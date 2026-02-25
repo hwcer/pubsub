@@ -224,13 +224,13 @@ ps.Subscribe("*.payment.>", func(topic string, msg interface{}) {
 ### 类型定义
 
 ```go
-// WorkMode 工作模式
-type WorkMode int
+// Mode 工作模式
+type Mode int
 
 const (
-    ModeUnknown WorkMode = iota // 未确定模式
-    ModeClient                  // 客户端模式
-    ModeServer                  // 服务器模式
+    ModeNone   Mode = iota // 未确定模式（初始状态）
+    ModeClient             // 客户端模式
+    ModeServer             // 服务器模式
 )
 ```
 
@@ -292,7 +292,7 @@ func (ps *PubSub) GetSubscriptions() []string
 func (ps *PubSub) GetSubscriberCount(topic string) int
 
 // Is 判断当前是否是指定的工作模式
-func (ps *PubSub) Is(mode WorkMode) bool
+func (ps *PubSub) Is(mode Mode) bool
 ```
 
 ## 完整示例

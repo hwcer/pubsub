@@ -18,9 +18,9 @@ func (ps *PubSub) processSubscriptions(topic string, msg interface{}) {
 // processExactSubscriptions 处理精确匹配的订阅
 func (ps *PubSub) processExactSubscriptions(topic string, msg interface{}) {
 	// 处理本地订阅
-	ps.subMu.RLock()
+	ps.mutex.RLock()
 	sub, ok := ps.subscriptions[topic]
-	ps.subMu.RUnlock()
+	ps.mutex.RUnlock()
 
 	if ok {
 		ps.sendToSubscribers(sub, topic, msg)
@@ -33,12 +33,12 @@ func (ps *PubSub) processExactSubscriptions(topic string, msg interface{}) {
 // processWildcardSubscriptions 处理通配符匹配的订阅
 func (ps *PubSub) processWildcardSubscriptions(topic string, msg interface{}) {
 	// 处理本地通配符订阅
-	ps.subMu.RLock()
+	ps.mutex.RLock()
 	subs := make([]*LocalSubscription, 0, len(ps.subscriptions))
 	for _, sub := range ps.subscriptions {
 		subs = append(subs, sub)
 	}
-	ps.subMu.RUnlock()
+	ps.mutex.RUnlock()
 
 	for _, sub := range subs {
 		if sub.Topic != topic && ps.matchesWildcard(sub.Topic, topic) {
@@ -120,8 +120,8 @@ func (ps *PubSub) matchesWildcard(subTopic, topic string) bool {
 
 // GetSubscriptions 获取所有本地订阅的主题列表
 func (ps *PubSub) GetSubscriptions() []string {
-	ps.subMu.RLock()
-	defer ps.subMu.RUnlock()
+	ps.mutex.RLock()
+	defer ps.mutex.RUnlock()
 
 	topics := make([]string, 0, len(ps.subscriptions))
 	for topic := range ps.subscriptions {
@@ -136,11 +136,11 @@ func (ps *PubSub) GetSubscriberCount(topic string) int {
 	count := 0
 
 	// 统计本地订阅
-	ps.subMu.RLock()
+	ps.mutex.RLock()
 	if _, ok := ps.subscriptions[topic]; ok {
 		count++
 	}
-	ps.subMu.RUnlock()
+	ps.mutex.RUnlock()
 
 	return count
 }

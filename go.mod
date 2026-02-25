@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/hwcer/cosgo v1.7.1
-	github.com/hwcer/cosnet v1.4.1-0.20260224083621-7e74b8b54fc0
+	github.com/hwcer/cosnet v1.4.1-0.20260225020019-46ad43d3b890
 )
 
 require (

@@ -43,12 +43,10 @@ func (h *serverHandler) BatchSubscribe(c *cosnet.Context) any {
 	}
 
 	// 批量添加订阅（去重）
-	added := 0
 	for _, topic := range data.Topics {
 		if !subsMap[topic] {
 			existingSubs = append(existingSubs, topic)
 			subsMap[topic] = true
-			added++
 		}
 	}
 
@@ -123,7 +121,10 @@ func (h *serverHandler) Publish(c *cosnet.Context) any {
 
 	// 处理本地订阅
 	h.pb.processSubscriptions(data.Topic, data.Payload)
-
+	m := Message{
+		Topic:   data.Topic,
+		Payload: data.Payload,
+	}
 	// 广播给其他客户端（不包括来源）
 	h.pb.sockets.Range(func(socket *cosnet.Socket) bool {
 		// 跳过来源socket
@@ -136,10 +137,7 @@ func (h *serverHandler) Publish(c *cosnet.Context) any {
 			if subs, ok := socketData.Get(SocketDataKeySubscriptions).([]string); ok {
 				for _, subTopic := range subs {
 					if subTopic == data.Topic || h.pb.matchesWildcard(subTopic, data.Topic) {
-						socket.Send(0, 0, PathMessage, Message{
-							Topic:   data.Topic,
-							Payload: data.Payload,
-						})
+						_ = socket.Send(1, 0, PathMessage, m, false)
 						break
 					}
 				}
@@ -174,10 +172,7 @@ func (h *clientHandler) Message(c *cosnet.Context) interface{} {
 	// 将消息发布到本地订阅
 	h.pb.processSubscriptions(data.Topic, data.Payload)
 
-	return map[string]interface{}{
-		"code":    "received",
-		"message": "消息接收成功",
-	}
+	return nil
 }
 
 // Heartbeat 处理服务器的心跳响应

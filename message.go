@@ -1,75 +1,57 @@
 package pubsub
 
 import (
-	"regexp"
-
 	"github.com/hwcer/cosnet"
 )
 
 // processSubscriptions 处理订阅（包括本地订阅和远程订阅）
-func (ps *PubSub) processSubscriptions(topic string, msg interface{}) {
-	// 处理精确匹配的订阅
-	ps.processExactSubscriptions(topic, msg)
-
-	// 处理通配符匹配的订阅
-	ps.processWildcardSubscriptions(topic, msg)
-}
-
-// processExactSubscriptions 处理精确匹配的订阅
-func (ps *PubSub) processExactSubscriptions(topic string, msg interface{}) {
-	// 处理本地订阅
-	ps.mutex.RLock()
-	sub, ok := ps.subscriptions[topic]
-	ps.mutex.RUnlock()
-
-	if ok {
-		ps.sendToSubscribers(sub, topic, msg)
-	}
+// source: 来源socket，为nil时广播给所有客户端，否则跳过来源
+func (ps *PubSub) processSubscriptions(msg Message, source *cosnet.Socket) {
+	// 处理本地订阅（包括精确匹配和通配符匹配）
+	ps.processLocalSubscriptions(msg)
 
 	// 处理远程订阅（仅服务器模式）
-	ps.broadcastToRemote(topic, msg, false)
+	ps.broadcastToRemote(msg, source)
 }
 
-// processWildcardSubscriptions 处理通配符匹配的订阅
-func (ps *PubSub) processWildcardSubscriptions(topic string, msg interface{}) {
-	// 处理本地通配符订阅
-	ps.mutex.RLock()
-	subs := make([]*LocalSubscription, 0, len(ps.subscriptions))
-	for _, sub := range ps.subscriptions {
-		subs = append(subs, sub)
-	}
-	ps.mutex.RUnlock()
+// processLocalSubscriptions 处理本地订阅（包括精确匹配和通配符匹配）
+func (ps *PubSub) processLocalSubscriptions(msg Message) {
+	topic := msg.GetTopic()
 
-	for _, sub := range subs {
-		if sub.Topic != topic && ps.matchesWildcard(sub.Topic, topic) {
-			ps.sendToSubscribers(sub, topic, msg)
+	ps.mutex.RLock()
+	defer ps.mutex.RUnlock()
+
+	// 一次遍历同时处理精确匹配和通配符匹配
+	for _, sub := range ps.subscriptions {
+		if sub.Topic == topic || ps.matchesWildcard(sub.Topic, topic) {
+			ps.sendToSubscribers(sub, msg)
 		}
 	}
-
-	// 处理远程通配符订阅（仅服务器模式）
-	ps.broadcastToRemote(topic, msg, true)
 }
 
 // broadcastToRemote 向远程客户端广播消息
-// wildcard: 是否匹配通配符
-func (ps *PubSub) broadcastToRemote(topic string, msg interface{}, wildcard bool) {
+// source: 来源socket，为nil时广播给所有客户端，否则跳过来源
+func (ps *PubSub) broadcastToRemote(msg Message, source *cosnet.Socket) {
 	if !ps.Is(ModeServer) || ps.sockets == nil {
 		return
 	}
 
+	topic := msg.GetTopic()
+
 	ps.sockets.Range(func(socket *cosnet.Socket) bool {
-		if ps.shouldSendToSocket(socket, topic, wildcard) {
-			socket.Send(0, 0, PathMessage, Message{
-				Topic:   topic,
-				Payload: msg,
-			})
+		// 跳过来源socket
+		if socket.Is(source) {
+			return true
+		}
+		if ps.shouldSendToSocket(socket, topic) {
+			socket.Send(0, 0, PathMessage, msg)
 		}
 		return true
 	})
 }
 
 // shouldSendToSocket 检查是否应该向该socket发送消息
-func (ps *PubSub) shouldSendToSocket(socket *cosnet.Socket, topic string, wildcard bool) bool {
+func (ps *PubSub) shouldSendToSocket(socket *cosnet.Socket, topic string) bool {
 	data := socket.Data()
 	if data == nil {
 		return false
@@ -78,7 +60,12 @@ func (ps *PubSub) shouldSendToSocket(socket *cosnet.Socket, topic string, wildca
 	// 检查订阅
 	if subs, ok := data.Get(SocketDataKeySubscriptions).([]string); ok {
 		for _, subTopic := range subs {
-			if ps.topicMatches(subTopic, topic, wildcard) {
+			// 检查精确匹配
+			if subTopic == topic {
+				return true
+			}
+			// 检查通配符匹配
+			if ps.matchesWildcard(subTopic, topic) {
 				return true
 			}
 		}
@@ -87,35 +74,19 @@ func (ps *PubSub) shouldSendToSocket(socket *cosnet.Socket, topic string, wildca
 	return false
 }
 
-// topicMatches 检查订阅主题是否匹配消息主题
-func (ps *PubSub) topicMatches(subTopic, msgTopic string, wildcard bool) bool {
-	if !wildcard {
-		// 精确匹配
-		return subTopic == msgTopic
-	}
-	// 通配符匹配（排除精确匹配的情况）
-	return subTopic != msgTopic && ps.matchesWildcard(subTopic, msgTopic)
-}
-
 // sendToSubscribers 向订阅者发送消息
-func (ps *PubSub) sendToSubscribers(sub *LocalSubscription, topic string, msg interface{}) {
+func (ps *PubSub) sendToSubscribers(sub *LocalSubscription, msg Message) {
 	if len(sub.Handlers) > 0 {
 		for _, handler := range sub.Handlers {
-			handler(topic, msg)
+			handler(msg)
 		}
 	}
 }
 
-// matchesWildcard 检查主题是否匹配通配符
+// matchesWildcard 检查主题是否匹配通配符（使用缓存优化）
 func (ps *PubSub) matchesWildcard(subTopic, topic string) bool {
-	rePattern := subTopic
-	rePattern = regexp.QuoteMeta(rePattern)
-	rePattern = regexp.MustCompile(`\*`).ReplaceAllString(rePattern, `[^.]+`)
-	rePattern = regexp.MustCompile(`\>`).ReplaceAllString(rePattern, `.+`)
-	rePattern = `^` + rePattern + `$`
-
-	matched, _ := regexp.MatchString(rePattern, topic)
-	return matched
+	re := ps.compileWildcardPattern(subTopic)
+	return re.MatchString(topic)
 }
 
 // GetSubscriptions 获取所有本地订阅的主题列表

@@ -114,37 +114,13 @@ func (h *serverHandler) Unsubscribe(c *cosnet.Context) any {
 
 // Publish 处理客户端的发布请求
 func (h *serverHandler) Publish(c *cosnet.Context) any {
-	var data Publication
-	if err := c.Bind(&data); err != nil {
+	var msg Response
+	if err := c.Bind(&msg); err != nil {
 		return err
 	}
 
-	// 处理本地订阅
-	h.pb.processSubscriptions(data.Topic, data.Payload)
-	m := Message{
-		Topic:   data.Topic,
-		Payload: data.Payload,
-	}
-	// 广播给其他客户端（不包括来源）
-	h.pb.sockets.Range(func(socket *cosnet.Socket) bool {
-		// 跳过来源socket
-		if socket == c.Socket {
-			return true
-		}
-
-		if socketData := socket.Data(); socketData != nil {
-			// 检查订阅
-			if subs, ok := socketData.Get(SocketDataKeySubscriptions).([]string); ok {
-				for _, subTopic := range subs {
-					if subTopic == data.Topic || h.pb.matchesWildcard(subTopic, data.Topic) {
-						_ = socket.Send(1, 0, PathMessage, m, false)
-						break
-					}
-				}
-			}
-		}
-		return true
-	})
+	// 处理本地订阅和远程广播（跳过来源socket）
+	h.pb.processSubscriptions(&msg, c.Socket)
 
 	return nil
 }
@@ -164,13 +140,13 @@ type clientHandler struct {
 
 // Message 接收服务器转发的消息
 func (h *clientHandler) Message(c *cosnet.Context) interface{} {
-	var data Message
+	var data Response
 	if err := c.Bind(&data); err != nil {
 		return err
 	}
 
-	// 将消息发布到本地订阅
-	h.pb.processSubscriptions(data.Topic, data.Payload)
+	// 将消息发布到本地订阅（无来源）
+	h.pb.processSubscriptions(&data, nil)
 
 	return nil
 }

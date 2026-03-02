@@ -3,6 +3,7 @@ package pubsub
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sync"
 
 	"github.com/hwcer/cosgo/session"
@@ -24,7 +25,7 @@ const (
 // LocalSubscription 本地订阅
 type LocalSubscription struct {
 	Topic    string
-	Handlers []func(topic string, msg any) // 支持多个handler
+	Handlers []SubscribeHandle // 支持多个handler
 }
 
 // PubSub 订阅发布系统
@@ -33,6 +34,7 @@ type PubSub struct {
 	mutex         sync.RWMutex // 保护 subscriptions 的读写锁
 	sockets       *cosnet.Sockets
 	subscriptions map[string]*LocalSubscription // 订阅列表，按主题分组
+	regexCache    map[string]*regexp.Regexp     // 正则表达式缓存
 }
 
 // New 创建一个新的PubSub实例（通用）
@@ -41,6 +43,7 @@ func New() *PubSub {
 		sockets:       cosnet.New(),
 		mode:          ModeNone,
 		subscriptions: make(map[string]*LocalSubscription),
+		regexCache:    make(map[string]*regexp.Regexp),
 	}
 	handler := ps.sockets.Handler()
 	handler.SetSerialize(ps.serialize)
@@ -137,7 +140,7 @@ func (ps *PubSub) onConnected(socket *cosnet.Socket) {
 // 服务器：响应客户端的心跳
 func (ps *PubSub) onHeartbeat(socket *cosnet.Socket, _ any) {
 	if socket.Type() == listener.SocketTypeClient {
-		flag := message.FlagIsHeartbeat + message.FlagNeedACK
+		flag := message.FlagHeartbeat + message.FlagACK
 		socket.Send(flag, 0, PathHeartbeat, nil)
 	}
 }
@@ -159,7 +162,7 @@ func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
 
 	// 批量发送订阅
 	if len(topics) > 0 {
-		flag := message.FlagNeedACK
+		flag := message.FlagACK
 		socket.Send(flag, 0, PathBatchSubscribe, BatchSubscription{Topics: topics})
 	}
 }
@@ -176,7 +179,7 @@ func (ps *PubSub) getOrCreateSubscription(topic string) *LocalSubscription {
 }
 
 // Subscribe 订阅主题
-func (ps *PubSub) Subscribe(topic string, handler func(topic string, msg interface{})) {
+func (ps *PubSub) Subscribe(topic string, handler SubscribeHandle) {
 	// 获取或创建订阅，添加handler（在锁保护下完成）
 	ps.mutex.Lock()
 	sub := ps.getOrCreateSubscription(topic)
@@ -221,14 +224,15 @@ func (ps *PubSub) UnsubscribeAll() {
 
 // Publish 发布消息到主题
 func (ps *PubSub) Publish(topic string, msg any) {
-	// 处理本地订阅
-	ps.processSubscriptions(topic, msg)
-
-	// 如果是客户端，向服务器发送发布请求
-	ps.sendToRemote(PathPublish, Publication{
+	i := &Request{
 		Topic:   topic,
 		Payload: msg,
-	})
+	}
+	// 处理本地订阅和远程广播（无来源）
+	ps.processSubscriptions(i, nil)
+
+	// 如果是客户端，向服务器发送发布请求
+	ps.sendToRemote(PathPublish, i)
 }
 
 // sendToRemote 向远程服务器发送消息（仅客户端模式）
@@ -237,7 +241,7 @@ func (ps *PubSub) sendToRemote(path string, data any) {
 		return
 	}
 	ps.sockets.Range(func(socket *cosnet.Socket) bool {
-		flag := message.FlagNeedACK
+		flag := message.FlagACK
 		socket.Send(flag, 0, path, data)
 		return true
 	})
@@ -251,4 +255,28 @@ func (ps *PubSub) serialize(c *cosnet.Context, reply any) ([]byte, error) {
 		r = values.Parse(reply)
 	}
 	return json.Marshal(r)
+}
+
+// compileWildcardPattern 编译通配符模式为正则表达式（带缓存）
+func (ps *PubSub) compileWildcardPattern(pattern string) *regexp.Regexp {
+	ps.mutex.RLock()
+	if re, ok := ps.regexCache[pattern]; ok {
+		ps.mutex.RUnlock()
+		return re
+	}
+	ps.mutex.RUnlock()
+
+	// 编译正则表达式
+	rePattern := regexp.QuoteMeta(pattern)
+	rePattern = regexp.MustCompile(`\*`).ReplaceAllString(rePattern, `[^.]+`)
+	rePattern = regexp.MustCompile(`\>`).ReplaceAllString(rePattern, `.+`)
+	rePattern = `^` + rePattern + `$`
+	re := regexp.MustCompile(rePattern)
+
+	// 缓存结果
+	ps.mutex.Lock()
+	ps.regexCache[pattern] = re
+	ps.mutex.Unlock()
+
+	return re
 }

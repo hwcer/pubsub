@@ -17,7 +17,7 @@ import (
 type Mode int
 
 const (
-	ModeNone   Mode = iota // 未确定模式（初始状态）
+	ModeNone   Mode = iota // 未确定模式（单机内部调用）
 	ModeClient             // 客户端模式
 	ModeServer             // 服务器模式
 )
@@ -80,6 +80,9 @@ func NewClient(address string) (*PubSub, error) {
 	return ps, nil
 }
 func (ps *PubSub) Start() error {
+	if ps.mode == ModeNone {
+		return nil
+	}
 	return ps.sockets.Start()
 }
 
@@ -141,7 +144,7 @@ func (ps *PubSub) onConnected(socket *cosnet.Socket) {
 func (ps *PubSub) onHeartbeat(socket *cosnet.Socket, _ any) {
 	if socket.Type() == listener.SocketTypeClient {
 		flag := message.FlagHeartbeat + message.FlagACK
-		socket.Send(flag, 0, PathHeartbeat, nil)
+		_ = socket.Send(flag, 0, PathHeartbeat, nil)
 	}
 }
 
@@ -163,7 +166,7 @@ func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
 	// 批量发送订阅
 	if len(topics) > 0 {
 		flag := message.FlagACK
-		socket.Send(flag, 0, PathBatchSubscribe, BatchSubscription{Topics: topics})
+		_ = socket.Send(flag, 0, PathBatchSubscribe, BatchSubscription{Topics: topics})
 	}
 }
 
@@ -242,7 +245,7 @@ func (ps *PubSub) sendToRemote(path string, data any) {
 	}
 	ps.sockets.Range(func(socket *cosnet.Socket) bool {
 		flag := message.FlagACK
-		socket.Send(flag, 0, path, data)
+		_ = socket.Send(flag, 0, path, data)
 		return true
 	})
 }

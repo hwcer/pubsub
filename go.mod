@@ -15,9 +15,9 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hwcer/cosweb v1.4.1-0.20260225143149-e4fc31891080 // indirect
 	github.com/hwcer/logger v0.2.8 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
+	github.com/onsi/gomega v1.39.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect

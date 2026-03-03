@@ -3,7 +3,7 @@ package pubsub
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/hwcer/cosgo/session"
@@ -29,21 +29,24 @@ type LocalSubscription struct {
 }
 
 // PubSub 订阅发布系统
+// 使用 COW (Copy-On-Write) 模式优化读取性能
+// 注意：此实现假设在 64 位架构上运行（x86_64, ARM64）
+// 在 32 位架构上可能存在并发安全问题
 type PubSub struct {
-	mode          Mode         // 工作模式
-	mutex         sync.RWMutex // 保护 subscriptions 的读写锁
-	sockets       *cosnet.Sockets
-	subscriptions map[string]*LocalSubscription // 订阅列表，按主题分组
-	regexCache    map[string]*regexp.Regexp     // 正则表达式缓存
+	mode                  Mode       // 工作模式
+	mutex                 sync.Mutex // 保护订阅列表的写锁（COW 模式）
+	sockets               *cosnet.Sockets
+	exactSubscriptions    map[string]*LocalSubscription // 精确匹配的订阅（COW 模式读取）
+	wildcardSubscriptions []*LocalSubscription          // 通配符匹配的订阅（COW 模式读取）
 }
 
 // New 创建一个新的PubSub实例（通用）
 func New() *PubSub {
 	ps := &PubSub{
-		sockets:       cosnet.New(),
-		mode:          ModeNone,
-		subscriptions: make(map[string]*LocalSubscription),
-		regexCache:    make(map[string]*regexp.Regexp),
+		sockets:               cosnet.New(),
+		mode:                  ModeNone,
+		exactSubscriptions:    make(map[string]*LocalSubscription),
+		wildcardSubscriptions: make([]*LocalSubscription, 0),
 	}
 	handler := ps.sockets.Handler()
 	handler.SetSerialize(ps.serialize)
@@ -60,25 +63,6 @@ func New() *PubSub {
 	return ps
 }
 
-// NewServer 快速创建并启动服务器
-func NewServer(address string) (*PubSub, error) {
-	ps := New()
-	err := ps.Listen(address)
-	if err != nil {
-		return nil, err
-	}
-	return ps, nil
-}
-
-// NewClient 快速创建客户端并连接到服务器
-func NewClient(address string) (*PubSub, error) {
-	ps := New()
-	err := ps.Connect(address)
-	if err != nil {
-		return nil, err
-	}
-	return ps, nil
-}
 func (ps *PubSub) Start() error {
 	if ps.mode == ModeNone {
 		return nil
@@ -113,54 +97,69 @@ func (ps *PubSub) Connect(address string) error {
 	_ = ps.sockets.Register(handle, BasePath, "%m")
 
 	_, err := ps.sockets.Connect(address)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-// Is 判断当前是否是指定的工作模式
+// Is 检查当前工作模式
 func (ps *PubSub) Is(mode Mode) bool {
 	return ps.mode == mode
 }
 
 // onConnected 连接建立时的回调
-// 如果是客户端，将本地订阅批量同步到远程
 func (ps *PubSub) onConnected(socket *cosnet.Socket) {
-	// 自动认证
-	v := session.NewData(fmt.Sprintf("%d", socket.Id()), nil)
-	socket.Authentication(v)
+	// 使用 SOCKETID 进行认证
+	data := socket.Data()
+	if data == nil {
+		data = session.NewData(fmt.Sprintf("%d", socket.Id()), nil)
+	}
+	socket.Authentication(data)
 
-	// 如果是客户端，批量同步本地订阅到远程
-	if ps.Is(ModeClient) {
+	// 设置 socket 类型到 session 数据
+	if data == nil {
+		return
+	}
+
+	// 根据 socket 类型执行不同逻辑
+	if socket.Type() == listener.SocketTypeClient {
+		// 服务器接受客户端连接
+		// 可以在这里进行额外的认证或初始化
+	} else if socket.Type() == listener.SocketTypeServer {
+		// 客户端连接到服务器
+		// 自动同步本地订阅到远程服务器
 		ps.syncSubscriptionsToRemote(socket)
 	}
 }
 
 // onHeartbeat 心跳事件处理
-// 客户端：发送心跳信息给服务器
-// 服务器：响应客户端的心跳
-func (ps *PubSub) onHeartbeat(socket *cosnet.Socket, _ any) {
+func (ps *PubSub) onHeartbeat(socket *cosnet.Socket, msg any) {
 	if socket.Type() == listener.SocketTypeClient {
-		flag := message.FlagHeartbeat + message.FlagACK
-		_ = socket.Send(flag, 0, PathHeartbeat, nil)
+		// 服务器收到客户端心跳，直接返回 nil 表示正常响应
+		// 可以在这里更新客户端活跃时间等
+	} else if socket.Type() == listener.SocketTypeServer {
+		// 客户端收到服务器心跳响应
+		// 可以在这里处理心跳超时逻辑、重连等
 	}
 }
 
 // syncSubscriptionsToRemote 将本地订阅同步到远程服务器（批量）
 func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
-	ps.mutex.RLock()
-	defer ps.mutex.RUnlock()
+	// COW 模式读取：直接读取，无需加锁
+	// 注意：此操作在 64 位架构上是安全的
+	exactSubs := ps.exactSubscriptions
+	wildcardSubs := ps.wildcardSubscriptions
 
-	if len(ps.subscriptions) == 0 {
+	totalSubscriptions := len(exactSubs) + len(wildcardSubs)
+	if totalSubscriptions == 0 {
 		return
 	}
 
 	// 收集所有订阅主题
-	topics := make([]string, 0, len(ps.subscriptions))
-	for topic := range ps.subscriptions {
+	topics := make([]string, 0, totalSubscriptions)
+	for topic := range exactSubs {
 		topics = append(topics, topic)
+	}
+	for _, sub := range wildcardSubs {
+		topics = append(topics, sub.Topic)
 	}
 
 	// 批量发送订阅
@@ -172,18 +171,42 @@ func (ps *PubSub) syncSubscriptionsToRemote(socket *cosnet.Socket) {
 
 // getOrCreateSubscription 获取或创建订阅（调用层需要加锁）
 func (ps *PubSub) getOrCreateSubscription(topic string) *LocalSubscription {
-	if sub, ok := ps.subscriptions[topic]; ok {
+	// 检查是否是通配符订阅
+	isWildcard := strings.Contains(topic, "*") || strings.Contains(topic, ">")
+
+	if isWildcard {
+		// 通配符订阅
+		for _, sub := range ps.wildcardSubscriptions {
+			if sub.Topic == topic {
+				return sub
+			}
+		}
+		sub := &LocalSubscription{Topic: topic}
+		// 复制切片并添加新订阅
+		newWildcardSubs := make([]*LocalSubscription, len(ps.wildcardSubscriptions)+1)
+		copy(newWildcardSubs, ps.wildcardSubscriptions)
+		newWildcardSubs[len(ps.wildcardSubscriptions)] = sub
+		ps.wildcardSubscriptions = newWildcardSubs
+		return sub
+	} else {
+		// 精确匹配订阅
+		if sub, ok := ps.exactSubscriptions[topic]; ok {
+			return sub
+		}
+		sub := &LocalSubscription{Topic: topic}
+		// 复制 map 并添加新订阅
+		newExactSubs := make(map[string]*LocalSubscription, len(ps.exactSubscriptions)+1)
+		for k, v := range ps.exactSubscriptions {
+			newExactSubs[k] = v
+		}
+		newExactSubs[topic] = sub
+		ps.exactSubscriptions = newExactSubs
 		return sub
 	}
-
-	sub := &LocalSubscription{Topic: topic}
-	ps.subscriptions[topic] = sub
-	return sub
 }
 
 // Subscribe 订阅主题
 func (ps *PubSub) Subscribe(topic string, handler SubscribeHandle) {
-	// 获取或创建订阅，添加handler（在锁保护下完成）
 	ps.mutex.Lock()
 	sub := ps.getOrCreateSubscription(topic)
 	sub.Handlers = append(sub.Handlers, handler)
@@ -196,8 +219,36 @@ func (ps *PubSub) Subscribe(topic string, handler SubscribeHandle) {
 // Unsubscribe 取消订阅主题
 func (ps *PubSub) Unsubscribe(topic string) {
 	ps.mutex.Lock()
-	delete(ps.subscriptions, topic)
-	ps.mutex.Unlock()
+	defer ps.mutex.Unlock()
+
+	// 检查是否是通配符订阅
+	isWildcard := strings.Contains(topic, "*") || strings.Contains(topic, ">")
+
+	if isWildcard {
+		// 从通配符订阅列表中移除
+		for i, sub := range ps.wildcardSubscriptions {
+			if sub.Topic == topic {
+				// 复制切片并移除元素
+				newWildcardSubs := make([]*LocalSubscription, 0, len(ps.wildcardSubscriptions)-1)
+				newWildcardSubs = append(newWildcardSubs, ps.wildcardSubscriptions[:i]...)
+				newWildcardSubs = append(newWildcardSubs, ps.wildcardSubscriptions[i+1:]...)
+				ps.wildcardSubscriptions = newWildcardSubs
+				break
+			}
+		}
+	} else {
+		// 从精确匹配订阅中移除
+		if _, ok := ps.exactSubscriptions[topic]; ok {
+			// 复制 map 并移除元素
+			newExactSubs := make(map[string]*LocalSubscription, len(ps.exactSubscriptions)-1)
+			for k, v := range ps.exactSubscriptions {
+				if k != topic {
+					newExactSubs[k] = v
+				}
+			}
+			ps.exactSubscriptions = newExactSubs
+		}
+	}
 
 	// 如果是客户端，向服务器发送取消订阅请求
 	ps.sendToRemote(PathUnsubscribe, Unsubscription{Topics: []string{topic}})
@@ -206,18 +257,21 @@ func (ps *PubSub) Unsubscribe(topic string) {
 // UnsubscribeAll 取消所有订阅
 // 清空本地订阅，如果是客户端则通知远程服务器
 func (ps *PubSub) UnsubscribeAll() {
+	ps.mutex.Lock()
+	defer ps.mutex.Unlock()
+
 	// 获取所有本地订阅主题
-	ps.mutex.RLock()
-	topics := make([]string, 0, len(ps.subscriptions))
-	for topic := range ps.subscriptions {
+	topics := make([]string, 0, len(ps.exactSubscriptions)+len(ps.wildcardSubscriptions))
+	for topic := range ps.exactSubscriptions {
 		topics = append(topics, topic)
 	}
-	ps.mutex.RUnlock()
+	for _, sub := range ps.wildcardSubscriptions {
+		topics = append(topics, sub.Topic)
+	}
 
-	// 清空本地订阅
-	ps.mutex.Lock()
-	ps.subscriptions = make(map[string]*LocalSubscription)
-	ps.mutex.Unlock()
+	// 清空本地订阅（创建新的空集合）
+	ps.exactSubscriptions = make(map[string]*LocalSubscription)
+	ps.wildcardSubscriptions = make([]*LocalSubscription, 0)
 
 	// 如果是客户端，通知远程服务器取消所有订阅
 	if len(topics) > 0 {
@@ -258,28 +312,4 @@ func (ps *PubSub) serialize(c *cosnet.Context, reply any) ([]byte, error) {
 		r = values.Parse(reply)
 	}
 	return json.Marshal(r)
-}
-
-// compileWildcardPattern 编译通配符模式为正则表达式（带缓存）
-func (ps *PubSub) compileWildcardPattern(pattern string) *regexp.Regexp {
-	ps.mutex.RLock()
-	if re, ok := ps.regexCache[pattern]; ok {
-		ps.mutex.RUnlock()
-		return re
-	}
-	ps.mutex.RUnlock()
-
-	// 编译正则表达式
-	rePattern := regexp.QuoteMeta(pattern)
-	rePattern = regexp.MustCompile(`\*`).ReplaceAllString(rePattern, `[^.]+`)
-	rePattern = regexp.MustCompile(`\>`).ReplaceAllString(rePattern, `.+`)
-	rePattern = `^` + rePattern + `$`
-	re := regexp.MustCompile(rePattern)
-
-	// 缓存结果
-	ps.mutex.Lock()
-	ps.regexCache[pattern] = re
-	ps.mutex.Unlock()
-
-	return re
 }

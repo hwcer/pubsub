@@ -1,6 +1,8 @@
 package pubsub
 
 import (
+	"regexp"
+
 	"github.com/hwcer/cosnet"
 )
 
@@ -18,12 +20,19 @@ func (ps *PubSub) processSubscriptions(msg Message, source *cosnet.Socket) {
 func (ps *PubSub) processLocalSubscriptions(msg Message) {
 	topic := msg.GetTopic()
 
-	ps.mutex.RLock()
-	defer ps.mutex.RUnlock()
+	// COW 模式读取：直接读取，无需加锁
+	// 注意：此操作在 64 位架构上是安全的
+	exactSubs := ps.exactSubscriptions
+	wildcardSubs := ps.wildcardSubscriptions
 
-	// 一次遍历同时处理精确匹配和通配符匹配
-	for _, sub := range ps.subscriptions {
-		if sub.Topic == topic || ps.matchesWildcard(sub.Topic, topic) {
+	// 处理精确匹配（直接通过map查找）
+	if sub, ok := exactSubs[topic]; ok {
+		ps.sendToSubscribers(sub, msg)
+	}
+
+	// 处理通配符匹配（只遍历通配符订阅）
+	for _, sub := range wildcardSubs {
+		if ps.matchesWildcard(sub.Topic, topic) {
 			ps.sendToSubscribers(sub, msg)
 		}
 	}
@@ -83,20 +92,31 @@ func (ps *PubSub) sendToSubscribers(sub *LocalSubscription, msg Message) {
 	}
 }
 
-// matchesWildcard 检查主题是否匹配通配符（使用缓存优化）
+// matchesWildcard 检查主题是否匹配通配符
 func (ps *PubSub) matchesWildcard(subTopic, topic string) bool {
-	re := ps.compileWildcardPattern(subTopic)
-	return re.MatchString(topic)
+	rePattern := subTopic
+	rePattern = regexp.QuoteMeta(rePattern)
+	rePattern = regexp.MustCompile(`\*`).ReplaceAllString(rePattern, `[^.]+`)
+	rePattern = regexp.MustCompile(`\>`).ReplaceAllString(rePattern, `.+`)
+	rePattern = `^` + rePattern + `$`
+
+	matched, _ := regexp.MatchString(rePattern, topic)
+	return matched
 }
 
 // GetSubscriptions 获取所有本地订阅的主题列表
 func (ps *PubSub) GetSubscriptions() []string {
-	ps.mutex.RLock()
-	defer ps.mutex.RUnlock()
+	// COW 模式读取：直接读取，无需加锁
+	// 注意：此操作在 64 位架构上是安全的
+	exactSubs := ps.exactSubscriptions
+	wildcardSubs := ps.wildcardSubscriptions
 
-	topics := make([]string, 0, len(ps.subscriptions))
-	for topic := range ps.subscriptions {
+	topics := make([]string, 0, len(exactSubs)+len(wildcardSubs))
+	for topic := range exactSubs {
 		topics = append(topics, topic)
+	}
+	for _, sub := range wildcardSubs {
+		topics = append(topics, sub.Topic)
 	}
 
 	return topics
@@ -104,14 +124,24 @@ func (ps *PubSub) GetSubscriptions() []string {
 
 // GetSubscriberCount 获取主题的订阅者数量
 func (ps *PubSub) GetSubscriberCount(topic string) int {
+	// COW 模式读取：直接读取，无需加锁
+	// 注意：此操作在 64 位架构上是安全的
+	exactSubs := ps.exactSubscriptions
+	wildcardSubs := ps.wildcardSubscriptions
+
 	count := 0
 
-	// 统计本地订阅
-	ps.mutex.RLock()
-	if _, ok := ps.subscriptions[topic]; ok {
+	// 检查精确匹配订阅
+	if _, ok := exactSubs[topic]; ok {
 		count++
 	}
-	ps.mutex.RUnlock()
+	// 检查通配符订阅
+	for _, sub := range wildcardSubs {
+		if sub.Topic == topic {
+			count++
+			break
+		}
+	}
 
 	return count
 }

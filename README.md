@@ -1,402 +1,239 @@
-# PubSub 发布订阅系统
+# PubSub
 
-基于 Go 实现的发布订阅系统，支持客户端-服务器模式，提供通配符订阅功能。
+Go 语言发布/订阅事件总线，核心零依赖，支持通配符订阅和可插拔传输层。
 
-## 特性
+## 安装
 
-- **客户端-服务器架构**：服务器管理客户端连接，客户端可连接多个服务器
-- **通配符订阅**：支持 `*` 和 `>` 通配符匹配主题
-- **批量订阅**：支持一次性订阅多个主题
-- **自动重连**：客户端自动同步订阅到远程服务器
-- **COW 优化**：使用 Copy-On-Write 模式优化读取性能
+```bash
+# 核心包（零外部依赖）
+go get github.com/hwcer/pubsub
 
-## 架构说明
+# Redis 传输层
+go get github.com/hwcer/pubsub/redis
 
-### COW (Copy-On-Write) 模式
-
-本系统使用 COW 模式优化订阅列表的读取性能：
-
-- **读取操作**（发布消息、查询订阅）：直接读取，**无需加锁**
-- **写入操作**（订阅、取消订阅）：复制数据并替换，使用写锁保护
-
-### 架构兼容性
-
-⚠️ **重要提示**：此实现优先在 **64 位架构**上运行（x86_64, ARM64）
-
-### COW 模型的安全保证
-
-在 COW 模型中，我们使用**原子替换**完整指针的方式：
-- **写入操作**：先创建完整的新数据结构，然后一次性替换指针
-- **读取操作**：直接读取当前指针值
-
-### 架构兼容性分析
-
-**64 位架构**（推荐）：
-- ✅ **完全支持**：64 位指针赋值是硬件保证的原子操作
-- ✅ 读取方要么看到旧的完整指针，要么看到新的完整指针
-
-**32 位架构**（完全支持）：
-- ✅ **完全安全**：32 位指针赋值通常是原子的
-- ✅ 不会看到损坏的指针或数据
-
-### COW 模型的一致性特性
-
-⚠️ **注意**：COW 模型的设计本身就不保证实时一致性：
-- 读取操作可能看到稍旧的数据（这是为了优化读取性能的设计选择）
-- 这不是架构兼容性问题，而是 COW 模型的固有特性
-
-**支持的架构**：
-- ✅ x86_64（现代服务器、PC）
-- ✅ ARM64（现代移动设备、服务器）
-- ✅ 其他 64 位架构
-- ✅ 32 位系统（x86, ARM32）
-
-**不推荐的架构**：
-- ❌ 嵌入式设备（某些特殊架构）
+# cosnet 网络传输层
+go get github.com/hwcer/pubsub/cosnet
+```
 
 ## 快速开始
 
-### 创建服务器
+### 本地事件总线
+
+核心包仅依赖 Go 标准库，无需任何外部依赖。
 
 ```go
 package main
 
 import (
-    "log"
+    "fmt"
     "github.com/hwcer/pubsub"
 )
 
+type UserEvent struct {
+    UID    int64  `json:"uid"`
+    Action string `json:"action"`
+}
+
 func main() {
-    // 方式1：快速创建并启动
-    server, err := pubsub.NewServer(":8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 方式2：手动创建
     ps := pubsub.New()
-    err := ps.Listen(":8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 服务器也可以订阅本地消息
-    ps.Subscribe("server.logs", func(topic string, msg interface{}) {
-        log.Printf("[Server] %s: %v", topic, msg)
+
+    ps.Subscribe("user.login", func(event *pubsub.Event) {
+        var msg UserEvent
+        event.Unmarshal(&msg)
+        fmt.Printf("user %d: %s\n", msg.UID, msg.Action)
     })
-    
-    // 启动服务
-    server.Start()
+
+    ps.Publish("user.login", &UserEvent{UID: 1001, Action: "login"})
 }
 ```
 
-### 创建客户端
+### 使用 Redis 分布式传输
+
+多进程/多服务之间共享事件，使用 per-topic Redis channel。
 
 ```go
 package main
 
 import (
-    "log"
-    "time"
+    "github.com/go-redis/redis/v8"
     "github.com/hwcer/pubsub"
+    psredis "github.com/hwcer/pubsub/redis"
 )
 
 func main() {
-    // 方式1：快速创建并连接
-    client, err := pubsub.NewClient("localhost:8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 方式2：手动创建
     ps := pubsub.New()
-    err := ps.Connect("localhost:8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 订阅主题
-    ps.Subscribe("user.login", func(topic string, msg interface{}) {
-        log.Printf("[Client] %s: %v", topic, msg)
+
+    client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+    ps.Use(psredis.New(client, "myapp"))
+
+    ps.Subscribe("order.created", func(event *pubsub.Event) {
+        // 本地和远程消息都会到达这里
     })
-    
-    // 发布消息
-    ps.Publish("user.login", map[string]string{
-        "username": "alice",
-        "time": time.Now().String(),
-    })
-    
-    select {} // 保持运行
+
+    ps.Start()
+
+    // 本地分发 + 通过 Redis 广播到其他进程
+    ps.Publish("order.created", map[string]any{"id": "ORD-001", "amount": 99.9})
 }
 ```
 
-## 通配符订阅（模糊订阅）
+### 使用 cosnet 网络传输
 
-系统支持两种通配符，让你可以灵活地订阅一类主题：
-
-### 通配符类型
-
-| 通配符 | 含义 | 示例 |
-|--------|------|------|
-| `*` | 匹配单个层级（任意字符，除点号） | `user.*.profile` |
-| `>` | 匹配一个或多个层级 | `user.>` |
-
-### 主题层级
-
-主题使用点号（`.`）分隔层级，例如：
-- `user.login`
-- `user.profile.update`
-- `order.created`
-- `order.status.changed`
-
-### 使用示例
-
-#### 1. 单层级通配符 `*`
-
-匹配单个层级的任意值。
+基于 TCP/WebSocket 的服务端-客户端模式。
 
 ```go
-// 订阅所有用户的登录事件
-ps.Subscribe("user.*.login", func(topic string, msg interface{}) {
-    log.Printf("用户登录: %s", topic)
-    // 匹配: user.alice.login, user.bob.login
-    // 不匹配: user.login, user.alice.profile.login
-})
+// 服务端
+ps := pubsub.New()
+ps.Use(pscosnet.Listen(":9000"))
+ps.Start()
 
-// 订阅所有服务的日志
-ps.Subscribe("*.logs", func(topic string, msg interface{}) {
-    log.Printf("日志: %s - %v", topic, msg)
-    // 匹配: api.logs, worker.logs, db.logs
-})
+// 客户端
+ps := pubsub.New()
+ps.Use(pscosnet.Connect("server:9000"))
+ps.Subscribe("events.>", handler)
+ps.Start()
 ```
 
-#### 2. 多层级通配符 `>`
+## 通配符订阅
 
-匹配一个或多个层级的任意值。
+主题使用 `.` 分隔层级，支持两种通配符：
+
+| 通配符 | 含义 | 示例模式 | 匹配 | 不匹配 |
+|--------|------|----------|------|--------|
+| `*` | 单层级 | `user.*.login` | `user.alice.login` | `user.login`, `user.a.b.login` |
+| `>` | 一个或多个层级 | `user.>` | `user.login`, `user.a.b.c` | `user` |
 
 ```go
-// 订阅所有用户相关事件
-ps.Subscribe("user.>", func(topic string, msg interface{}) {
-    log.Printf("用户事件: %s", topic)
-    // 匹配: 
-    //   user.login
-    //   user.alice.login
-    //   user.profile.update
-    //   user.alice.profile.update
-})
+// 所有用户事件
+ps.Subscribe("user.>", handler)
 
-// 订阅所有订单状态变更
-ps.Subscribe("order.>.status", func(topic string, msg interface{}) {
-    log.Printf("订单状态: %s - %v", topic, msg)
-    // 匹配:
-    //   order.123.status
-    //   order.abc.def.status
-})
+// 任意服务的日志
+ps.Subscribe("*.logs", handler)
+
+// 精确匹配和通配符匹配的订阅者都会收到消息
 ```
 
-#### 3. 组合使用
+## 架构
+
+```
+pubsub (核心)          仅 Go 标准库，无外部依赖
+├── pubsub/cosnet      cosnet 网络传输（TCP/WebSocket 服务端-客户端）
+└── pubsub/redis       Redis Pub/Sub 传输（跨进程分布式）
+```
+
+### 消息流
+
+**发布 (Publish)**
+
+1. 在本地创建 `Event`（payload 为原始 Go 对象），分发给匹配的本地 Handler
+2. 若存在传输层，将 payload JSON 序列化后调用 `transport.Publish(topic, bytes)`
+
+**远程接收**
+
+1. 传输层收到远程消息，调用 `receiver(topic, bytes)`
+2. 核心创建 `Event`（data 为 JSON 字节），分发给匹配的本地 Handler
+3. Handler 调用 `event.Unmarshal(&target)` 时自动进行 JSON 反序列化
+
+**本地零拷贝**
+
+本地发布时，`Event.Unmarshal` 会尝试直接赋值（反射），类型匹配时跳过 JSON 序列化/反序列化，避免不必要的开销。
+
+**消息去重**
+
+`Publish` 保证本地恰好分发一次，不会因传输层回传导致重复：
+- **cosnet**：服务端广播时跳过消息来源 socket
+- **Redis**：消息包装为 `envelope{Origin, Data}`，每个实例有唯一 ID，接收时过滤掉自身发出的消息
+
+### 并发模型
+
+- 订阅列表使用 **COW (Copy-On-Write)** 模式：读取无锁，写入复制后替换
+- 所有公开方法线程安全
+
+## API
+
+### 核心类型
 
 ```go
-// 订阅所有区域的所有服务日志
-ps.Subscribe("*.*.logs", func(topic string, msg interface{}) {
-    // 匹配: prod.api.logs, dev.worker.logs, test.db.logs
-})
+// Handler 订阅回调
+type Handler func(event *Event)
 
-// 订阅某个区域的所有事件
-ps.Subscribe("prod.>", func(topic string, msg interface{}) {
-    // 匹配: prod.api.start, prod.db.connected, prod.worker.job.done
-})
-```
+// Event 发布的事件
+type Event struct {
+    Topic string          // 主题名称
+}
+func (e *Event) Unmarshal(v any) error  // 反序列化 payload 到目标对象
 
-### 匹配规则总结
-
-```
-订阅主题: user.*.login
-匹配:     user.alice.login, user.bob.login
-不匹配:   user.login, user.alice.profile.login
-
-订阅主题: user.>
-匹配:     user.login, user.alice.login, user.alice.profile.update
-不匹配:   user, admin.user.login
-
-订阅主题: *.logs
-匹配:     api.logs, db.logs
-不匹配:   logs, prod.api.logs
-
-订阅主题: order.*.status
-匹配:     order.123.status, order.abc.status
-不匹配:   order.status, order.123.456.status
-```
-
-### 注意事项
-
-1. **层级分隔**：主题使用点号 `.` 分隔层级
-2. **通配符位置**：`*` 和 `>` 可以出现在主题的任意位置
-3. **精确匹配优先**：如果同时订阅了精确主题和通配符主题，两者都会收到消息
-4. **性能考虑**：过于宽泛的通配符（如 `>`）可能导致消息分发到更多订阅者
-
-### 实际应用场景
-
-```go
-// 场景1：监控所有 API 请求
-ps.Subscribe("api.>.request", func(topic string, msg interface{}) {
-    // 记录所有 API 请求日志
-    metrics.RecordAPICall(topic, msg)
-})
-
-// 场景2：用户通知系统
-ps.Subscribe("notify.user.*", func(topic string, msg interface{}) {
-    // 发送用户通知
-    userID := extractUserID(topic) // 从 topic 解析用户ID
-    sendNotification(userID, msg)
-})
-
-// 场景3：订单全生命周期监控
-ps.Subscribe("order.>", func(topic string, msg interface{}) {
-    // 记录订单所有状态变更
-    orderLogger.Log(topic, msg)
-})
-
-// 场景4：特定服务的所有事件
-ps.Subscribe("*.payment.>", func(topic string, msg interface{}) {
-    // 处理所有支付相关事件
-    processPaymentEvent(topic, msg)
-})
-```
-
-## API 参考
-
-### 类型定义
-
-```go
-// Mode 工作模式
-type Mode int
-
-const (
-    ModeNone   Mode = iota // 未确定模式（初始状态）
-    ModeClient             // 客户端模式
-    ModeServer             // 服务器模式
-)
-```
-
-### 主要方法
-
-#### 创建实例
-
-```go
-// New 创建一个新的 PubSub 实例
-func New() *PubSub
-
-// NewServer 快速创建并启动服务器
-func NewServer(address string) (*PubSub, error)
-
-// NewClient 快速创建客户端并连接到服务器
-func NewClient(address string) (*PubSub, error)
-```
-
-#### 服务器方法
-
-```go
-// Listen 启动服务器监听
-func (ps *PubSub) Listen(address string) error
-
-// Start 启动服务（阻塞）
-func (ps *PubSub) Start() error
-```
-
-#### 客户端方法
-
-```go
-// Connect 连接到服务器
-func (ps *PubSub) Connect(address string) error
-```
-
-#### 订阅与发布
-
-```go
-// Subscribe 订阅主题
-func (ps *PubSub) Subscribe(topic string, handler func(topic string, msg interface{}))
-
-// Unsubscribe 取消订阅主题
-func (ps *PubSub) Unsubscribe(topic string)
-
-// UnsubscribeAll 取消所有订阅
-func (ps *PubSub) UnsubscribeAll()
-
-// Publish 发布消息到主题
-func (ps *PubSub) Publish(topic string, msg interface{})
-```
-
-#### 查询方法
-
-```go
-// GetSubscriptions 获取所有本地订阅的主题列表
-func (ps *PubSub) GetSubscriptions() []string
-
-// GetSubscriberCount 获取主题的订阅者数量
-func (ps *PubSub) GetSubscriberCount(topic string) int
-
-// Is 判断当前是否是指定的工作模式
-func (ps *PubSub) Is(mode Mode) bool
-```
-
-## 完整示例
-
-```go
-package main
-
-import (
-    "log"
-    "time"
-    "github.com/hwcer/pubsub"
-)
-
-func main() {
-    // 启动服务器
-    server, err := pubsub.NewServer(":8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 服务器订阅所有用户事件（通配符）
-    server.Subscribe("user.>", func(topic string, msg interface{}) {
-        log.Printf("[Server] 用户事件: %s = %v", topic, msg)
-    })
-    
-    go server.Start()
-    
-    time.Sleep(100 * time.Millisecond)
-    
-    // 创建客户端
-    client, err := pubsub.NewClient("localhost:8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 客户端订阅特定主题
-    client.Subscribe("user.login", func(topic string, msg interface{}) {
-        log.Printf("[Client] 登录: %v", msg)
-    })
-    
-    // 客户端订阅通配符主题
-    client.Subscribe("user.*.profile", func(topic string, msg interface{}) {
-        log.Printf("[Client] 资料更新: %v", msg)
-    })
-    
-    time.Sleep(100 * time.Millisecond)
-    
-    // 发布消息
-    client.Publish("user.login", "alice")
-    client.Publish("user.alice.profile", map[string]int{"age": 25})
-    client.Publish("user.bob.login", "bob")
-    
-    time.Sleep(1 * time.Second)
+// Transport 传输层接口
+type Transport interface {
+    Start(receiver func(topic string, data []byte)) error
+    Close() error
+    Publish(topic string, data []byte) error
+    Subscribe(topics []string)
+    Unsubscribe(topics []string)
 }
 ```
 
-## 注意事项
+### PubSub 方法
 
-1. **线程安全**：所有方法都是线程安全的，可以在多个 goroutine 中并发调用
-2. **消息顺序**：同一主题的消息会按发布顺序传递给订阅者
-3. **错误处理**：连接错误会自动重连，订阅会自动同步
-4. **资源释放**：程序退出时会自动清理资源
+```go
+func New() *PubSub                                // 创建事件总线
+func (ps *PubSub) Use(t Transport)                // 注册传输层（Start 前调用）
+func (ps *PubSub) Start() error                   // 启动所有传输层
+func (ps *PubSub) Close() error                   // 关闭所有传输层
+func (ps *PubSub) Subscribe(topic string, h Handler)  // 订阅主题
+func (ps *PubSub) Unsubscribe(topic string)        // 取消订阅
+func (ps *PubSub) Publish(topic string, payload any)   // 发布消息
+func (ps *PubSub) GetSubscriptions() []string      // 获取所有已订阅主题
+func (ps *PubSub) GetSubscriberCount(topic string) int // 获取主题订阅数
+```
+
+### Redis 传输层
+
+```go
+import psredis "github.com/hwcer/pubsub/redis"
+
+// New 创建 Redis 传输层
+// prefix 用于 Redis channel 命名隔离，channel 格式为 "prefix:topic"
+func New(client *redis.Client, prefix string) *Transport
+```
+
+### cosnet 传输层
+
+```go
+import pscosnet "github.com/hwcer/pubsub/cosnet"
+
+func Listen(address string) *ServerTransport   // 创建服务端传输
+func Connect(address string) *ClientTransport  // 创建客户端传输
+```
+
+## 自定义传输层
+
+实现 `pubsub.Transport` 接口即可接入任意消息中间件：
+
+```go
+type MyTransport struct { /* ... */ }
+
+func (t *MyTransport) Start(receiver func(topic string, data []byte)) error {
+    // 保存 receiver，启动消息接收循环
+    // 收到远程消息时调用 receiver(topic, data)
+}
+
+func (t *MyTransport) Close() error { /* 关闭连接 */ }
+
+func (t *MyTransport) Publish(topic string, data []byte) error {
+    // 将消息发送到远程
+}
+
+func (t *MyTransport) Subscribe(topics []string) {
+    // 通知远程本地新增了订阅（可选实现）
+}
+
+func (t *MyTransport) Unsubscribe(topics []string) {
+    // 通知远程本地移除了订阅（可选实现）
+}
+
+// 使用
+ps := pubsub.New()
+ps.Use(&MyTransport{})
+ps.Start()
+```

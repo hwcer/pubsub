@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```bash
-# Build core (zero external dependencies)
+# Build core (only dep is hwcer/logger, itself stdlib-only)
 go build ./...
 
 # Build cosnet transport sub-module
@@ -19,11 +19,11 @@ No tests exist yet. The sub-modules (`cosnet/`, `redis/`) are separate Go module
 
 ## Architecture
 
-This is a publish/subscribe event bus with a pluggable transport layer. The core package has **zero external dependencies** (Go stdlib only). Network and distributed capabilities are provided through separate sub-modules.
+This is a publish/subscribe event bus with a pluggable transport layer. The core package's only external dependency is `github.com/hwcer/logger` (used for the default `Logger`; that module is itself stdlib-only). Network and distributed capabilities are provided through separate sub-modules.
 
 ### Core Package (`pubsub`)
 
-Three files, stdlib only:
+Three files:
 
 - **`pubsub.go`** — `PubSub` struct with `Subscribe`, `Publish`, `Use` (register transport), `Start`/`Close`. Subscriptions are split into two COW (Copy-On-Write) collections: `exact` (map lookup) for precise topics and `wildcards` (slice scan with precompiled regex) for pattern topics. Writes copy-then-replace under `sync.Mutex`; reads are lock-free.
 - **`event.go`** — `Event`, `Handler`, and `Transport` interface. `Event` has unexported `payload any` (local) and `data []byte` (remote). `Unmarshal` tries reflect-based direct assignment first (zero-copy for local), falls back to JSON roundtrip.

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"sync"
+
+	"github.com/hwcer/logger"
 )
 
 type subscription struct {
@@ -15,10 +17,17 @@ type subscription struct {
 // DefaultQueueSize 远程消息队列的默认容量
 const DefaultQueueSize = 256
 
-// Logger 日志输出接口。本包不引入日志依赖，由调用方注入实现，
-// 未注入时相关信息静默丢弃。
+// Logger 日志输出接口，方法集与 github.com/hwcer/logger 对齐，
+// 可直接传入 logger.New()。默认输出到 logger 的默认实例。
 type Logger interface {
-	Errorf(format string, args ...any)
+	Error(format any, args ...any)
+}
+
+// defaultLogger 默认实现，转发到 hwcer/logger 的包级默认实例
+type defaultLogger struct{}
+
+func (defaultLogger) Error(format any, args ...any) {
+	logger.Error(format, args...)
 }
 
 // PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层
@@ -40,6 +49,7 @@ func New() *PubSub {
 		exact:     make(map[string]*subscription),
 		wildcards: make([]*subscription, 0),
 		queue:     make(chan *Event, DefaultQueueSize),
+		logger:    defaultLogger{},
 	}
 }
 
@@ -57,15 +67,15 @@ func (ps *PubSub) SetQueue(size int) {
 	ps.queue = make(chan *Event, size)
 }
 
-// SetLogger 注入日志实现，用于输出远程消息投递失败（队列满、订阅回调 panic）等信息。
-// 必须在 Start 之前设置。
+// SetLogger 覆盖默认日志实现，用于输出远程消息投递失败（队列满、订阅回调 panic）
+// 等信息。传 nil 表示静默丢弃。必须在 Start 之前设置。
 func (ps *PubSub) SetLogger(l Logger) {
 	ps.logger = l
 }
 
 func (ps *PubSub) errorf(format string, args ...any) {
 	if ps.logger != nil {
-		ps.logger.Errorf(format, args...)
+		ps.logger.Error(format, args...)
 	}
 }
 

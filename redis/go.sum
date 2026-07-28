@@ -10,6 +10,8 @@ github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245 h1:hsbI1UJ2Zsj2qG7a
 github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245/go.mod h1:NGF7QlsEFiTKJv0NO0XAJ4jlT7I8OdAGiT2SY2+Y6E4=
 github.com/hwcer/pubsub v0.0.0-20260728073641-b36524918c6e h1:xMXfjgqKt3MJ1STpOfotNdXY4pk7VAEhOQ7fh8WC9TA=
 github.com/hwcer/pubsub v0.0.0-20260728073641-b36524918c6e/go.mod h1:e9q1BQsSofqD1y5ooh0h9moRllyrJeOpY4snbtB9ImA=
+github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc h1:joBhmdxc9PYcrtSHJTvUEMSotkTQVswtYnNgpqdGvJA=
+github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc/go.mod h1:e9q1BQsSofqD1y5ooh0h9moRllyrJeOpY4snbtB9ImA=
 github.com/nxadm/tail v1.4.8 h1:nPr65rt6Y5JFSKQO7qToXr7pePgD6Gwiw05lkbyAQTE=
 github.com/nxadm/tail v1.4.8/go.mod h1:+ncqLTQzXmGhMZNUePPaPqPvBxHAIsmXswZKocGu+AU=
 github.com/onsi/ginkgo v1.16.5 h1:8xi0RTUf59SOSfEtZMvwTvXYMzG4gV23XVHOZiXNtnE=

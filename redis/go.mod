@@ -6,7 +6,7 @@ go 1.25.0
 // require 的真实版本。本地要同时改核心包与本子模块时用 go work,不要把 replace 写回。
 require (
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/hwcer/pubsub v0.0.0-20260728073641-b36524918c6e
+	github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc
 )
 
 require (

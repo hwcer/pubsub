@@ -4,9 +4,9 @@ go 1.25.0
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/hwcer/pubsub v0.0.0-20260728074239-03b34fc3864c
-	github.com/hwcer/pubsub/cosnet v0.0.0-20260728074239-03b34fc3864c
-	github.com/hwcer/pubsub/redis v0.0.0-20260728074239-03b34fc3864c
+	github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc
+	github.com/hwcer/pubsub/cosnet v0.0.0-20260728075544-f351c68a65dc
+	github.com/hwcer/pubsub/redis v0.0.0-20260728075544-f351c68a65dc
 )
 
 require (

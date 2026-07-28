@@ -7,7 +7,7 @@ go 1.25.0
 require (
 	github.com/hwcer/cosgo v1.8.2
 	github.com/hwcer/cosnet v1.4.3
-	github.com/hwcer/pubsub v0.0.0-20260728063404-f6955958fd4d
+	github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc
 )
 
 require (
@@ -18,7 +18,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hwcer/logger v0.2.8 // indirect
+	github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect

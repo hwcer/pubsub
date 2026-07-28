@@ -91,6 +91,7 @@ func (t *ServerTransport) Start(receiver func(string, []byte)) error {
 }
 
 func (t *ServerTransport) Close() error {
+	t.sockets.Close()
 	return nil
 }
 
@@ -194,7 +195,10 @@ func (t *ClientTransport) Start(receiver func(string, []byte)) error {
 	return t.sockets.Start()
 }
 
+// Close 关闭连接。必须真正关掉 sockets：客户端开了无限重连时，
+// 只是丢掉引用会让重连协程一直转下去，进程退不掉。
 func (t *ClientTransport) Close() error {
+	t.sockets.Close()
 	return nil
 }
 

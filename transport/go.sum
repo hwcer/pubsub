@@ -33,6 +33,8 @@ github.com/hwcer/pubsub/cosnet v0.0.0-20260728074239-03b34fc3864c h1:Kwwl3h7if/C
 github.com/hwcer/pubsub/cosnet v0.0.0-20260728074239-03b34fc3864c/go.mod h1:EJC3baG1AlaTAHELhi8LtqZ62rOICrHLDrq5Ak2O6Es=
 github.com/hwcer/pubsub/cosnet v0.0.0-20260728075544-f351c68a65dc h1:l7v+1calcdnGqGi6zX9p3kpUvEKfchlb4Lr01V6LR9c=
 github.com/hwcer/pubsub/cosnet v0.0.0-20260728075544-f351c68a65dc/go.mod h1:EJC3baG1AlaTAHELhi8LtqZ62rOICrHLDrq5Ak2O6Es=
+github.com/hwcer/pubsub/cosnet v0.0.0-20260728091156-6fc65eeb8121 h1:Ml+EPHJzYgB+5s0N/XDwYP/LkqsEb1cJb6POl5WPc6M=
+github.com/hwcer/pubsub/cosnet v0.0.0-20260728091156-6fc65eeb8121/go.mod h1:Zz9k+M3KExwhJ6KQipdZQriRfvttVa9AJQYWN1iyIBk=
 github.com/hwcer/pubsub/redis v0.0.0-20260728074239-03b34fc3864c h1:R4gqK/qN0rH12Wp4dJpGsAYIum7UQgOVOcZbCHoPYlc=
 github.com/hwcer/pubsub/redis v0.0.0-20260728074239-03b34fc3864c/go.mod h1:TQXmwSceiKwfX1Hnq9DzOLUS3m1gWlfr9Jpo0OWq0u8=
 github.com/hwcer/pubsub/redis v0.0.0-20260728075544-f351c68a65dc h1:pIEu741gC2txTMhU2unYBeLlnxGlBa/0gy8u7Jz0IgI=

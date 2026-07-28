@@ -13,7 +13,11 @@ const (
 	pathUnsubscribe    = basePath + "/unsubscribe"
 	pathPublish        = basePath + "/publish"
 	pathMessage        = basePath + "/message"
+	pathPing           = basePath + "/ping"
 )
+
+// pingReq 心跳包，不携带内容
+type pingReq struct{}
 
 type subscriptionReq struct {
 	Topic string `json:"topic"`
@@ -113,6 +117,12 @@ func (h *serverHandler) Unsubscribe(c *cosnet.Context) any {
 	return nil
 }
 
+// Ping 心跳。收包本身已经在 readMsgTrue 里刷新了服务端 socket 的活跃时间，
+// 这里回一个包让客户端收到、同样刷新它那一侧。
+func (h *serverHandler) Ping(c *cosnet.Context) any {
+	return true
+}
+
 func (h *serverHandler) Publish(c *cosnet.Context) any {
 	var msg publishReq
 	if err := c.Bind(&msg); err != nil {
@@ -125,6 +135,11 @@ func (h *serverHandler) Publish(c *cosnet.Context) any {
 // clientHandler 客户端消息处理器
 type clientHandler struct {
 	transport *ClientTransport
+}
+
+// Ping 接收服务端的心跳回包。回包带 FlagConfirm，cosnet 不会再回复，不会形成乒乓。
+func (h *clientHandler) Ping(c *cosnet.Context) any {
+	return nil
 }
 
 func (h *clientHandler) Message(c *cosnet.Context) any {

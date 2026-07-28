@@ -10,7 +10,6 @@ import (
 	"github.com/hwcer/cosgo/session"
 	"github.com/hwcer/cosgo/values"
 	"github.com/hwcer/cosnet"
-	"github.com/hwcer/cosnet/listener"
 	"github.com/hwcer/cosnet/message"
 	"github.com/hwcer/pubsub"
 )
@@ -177,9 +176,16 @@ func (t *ClientTransport) Start(receiver func(string, []byte)) error {
 			data = session.NewData(fmt.Sprintf("%d", socket.Id()), nil)
 		}
 		socket.Authentication(data)
-		if socket.Type() == listener.SocketTypeServer {
-			t.syncSubscriptions(socket)
-		}
+		//本实例只有主动发起的连接，无条件同步订阅。
+		//不能用 Type() 做判断：首次连接时 address 尚未赋值（Connect 在 Create 之后才设），
+		//重连时已有值，两次返回的类型不同，会导致重连后订阅丢失、连上却收不到任何消息。
+		t.syncSubscriptions(socket)
+	})
+	//空闲连接会被 cosnet 的心跳判死：KeepAlive 只在收包时触发，而守护协程每
+	//Options.Heartbeat 秒累加一次，超过 SocketConnectTime 即断开。事件总线平时无流量，
+	//必须主动发心跳——收到服务端回包时两侧的活跃时间才会一起刷新。
+	t.sockets.On(cosnet.EventTypeHeartbeat, func(socket *cosnet.Socket, _ any) {
+		_ = socket.Send(message.Flag(0), 0, pathPing, pingReq{})
 	})
 	_ = t.sockets.Register(&clientHandler{transport: t}, basePath, "%m")
 	if _, err := t.sockets.Connect(t.address); err != nil {

@@ -52,10 +52,25 @@ type ServerTransport struct {
 	address  string
 	sockets  *cosnet.Sockets
 	receiver func(topic string, data []byte)
+	readOnly bool
 }
 
 func Listen(address string) *ServerTransport {
 	return &ServerTransport{address: address, sockets: cosnet.New()}
+}
+
+// Options 返回底层 cosnet 配置，必须在 Start 之前修改。
+// cosnet.New() 是把包级 Options 值拷贝进实例，所以只能通过本方法调整本实例的配置。
+func (t *ServerTransport) Options() *cosnet.Config {
+	return &t.sockets.Options
+}
+
+// ReadOnly 只读模式：忽略客户端发来的 publish，仅单向下发。
+// 服务端对每个连入的 socket 无条件 Authentication，若不开启只读，
+// 任何能连到本端口的客户端都能把消息注入本进程的事件总线。
+// 单向下发场景（服务端发布、客户端只订阅）应一律开启。
+func (t *ServerTransport) ReadOnly(b bool) {
+	t.readOnly = b
 }
 
 func (t *ServerTransport) Start(receiver func(string, []byte)) error {
@@ -93,8 +108,11 @@ func (t *ServerTransport) Publish(topic string, data []byte) error {
 func (t *ServerTransport) Subscribe(_ []string)   {}
 func (t *ServerTransport) Unsubscribe(_ []string) {}
 
-// onRemotePublish 处理客户端发来的发布请求
+// onRemotePublish 处理客户端发来的发布请求，只读模式下直接丢弃
 func (t *ServerTransport) onRemotePublish(topic string, data []byte, source *cosnet.Socket) {
+	if t.readOnly {
+		return
+	}
 	if t.receiver != nil {
 		t.receiver(topic, data)
 	}
@@ -140,6 +158,13 @@ type ClientTransport struct {
 
 func Connect(address string) *ClientTransport {
 	return &ClientTransport{address: address, sockets: cosnet.New()}
+}
+
+// Options 返回底层 cosnet 配置，必须在 Start 之前修改。
+// 典型用法：ClientReconnectMax = 0 表示无限重连。默认值 10 在约 3 分钟后彻底放弃重连，
+// 之后既不会再连上也不会报错，表现为永久静默失联。
+func (t *ClientTransport) Options() *cosnet.Config {
+	return &t.sockets.Options
 }
 
 func (t *ClientTransport) Start(receiver func(string, []byte)) error {

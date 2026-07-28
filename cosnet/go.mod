@@ -2,12 +2,12 @@ module github.com/hwcer/pubsub/cosnet
 
 go 1.25.0
 
-replace github.com/hwcer/pubsub => ../
-
+// 不要在这里 replace 核心包:replace 只对主模块生效,下游 go get 时会忽略它并去解析
+// require 的真实版本。本地要同时改核心包与本子模块时用 go work,不要把 replace 写回。
 require (
 	github.com/hwcer/cosgo v1.8.2
 	github.com/hwcer/cosnet v1.4.3
-	github.com/hwcer/pubsub v0.0.0
+	github.com/hwcer/pubsub v0.0.0-20260521024319-cb0b06ba342d
 )
 
 require (

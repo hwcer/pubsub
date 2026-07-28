@@ -8,6 +8,7 @@
 package transport
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	SchemeTCP   = "tcp"
-	SchemeRedis = "redis"
+	SchemeTCP    = "tcp"
+	SchemeRedis  = "redis"
+	SchemeRediss = "rediss" //redis over TLS
 )
 
 // 客户端重连参数。cosnet 的默认值对事件总线不合适：
@@ -52,16 +54,22 @@ func Prefix(s string) Option {
 }
 
 // Listen 创建服务端传输层。
-// redis 没有服务端概念，redis:// 地址下与 Connect 等价。
+//
+// redis 没有服务端概念，redis:// 地址下与 Connect 等价，
+// ReadOnly 也随之失效——任何能连到该 redis 的进程都能往 topic 发消息，
+// 需要靠 redis 自身的 ACL 或网络隔离来防。
 func Listen(address string, opts ...Option) (pubsub.Transport, error) {
-	scheme, addr := split(address)
+	scheme, addr, err := split(address)
+	if err != nil {
+		return nil, err
+	}
 	cfg := parse(opts)
 	switch scheme {
 	case SchemeTCP:
 		t := pscosnet.Listen(addr)
 		t.ReadOnly(cfg.readOnly)
 		return t, nil
-	case SchemeRedis:
+	case SchemeRedis, SchemeRediss:
 		return dialRedis(address, cfg)
 	default:
 		return nil, fmt.Errorf("pubsub: unsupported transport scheme:%v", scheme)
@@ -70,7 +78,10 @@ func Listen(address string, opts ...Option) (pubsub.Transport, error) {
 
 // Connect 创建客户端传输层。
 func Connect(address string, opts ...Option) (pubsub.Transport, error) {
-	scheme, addr := split(address)
+	scheme, addr, err := split(address)
+	if err != nil {
+		return nil, err
+	}
 	cfg := parse(opts)
 	switch scheme {
 	case SchemeTCP:
@@ -80,7 +91,7 @@ func Connect(address string, opts ...Option) (pubsub.Transport, error) {
 		o.ClientReconnectTime = clientReconnectTime
 		o.ClientReconnectMaxDelay = clientReconnectMaxDelay
 		return t, nil
-	case SchemeRedis:
+	case SchemeRedis, SchemeRediss:
 		return dialRedis(address, cfg)
 	default:
 		return nil, fmt.Errorf("pubsub: unsupported transport scheme:%v", scheme)
@@ -97,11 +108,14 @@ func dialRedis(address string, cfg *config) (pubsub.Transport, error) {
 
 // split 拆出协议与地址，未带 scheme 时按 tcp 处理。
 // 注意 cosnet 只要 host:port，不要把 tcp:// 前缀带进去。
-func split(address string) (scheme, addr string) {
-	if i := strings.Index(address, "://"); i >= 0 {
-		return strings.ToLower(address[:i]), address[i+3:]
+func split(address string) (scheme, addr string, err error) {
+	if address == "" {
+		return "", "", errors.New("pubsub: transport address is empty")
 	}
-	return SchemeTCP, address
+	if i := strings.Index(address, "://"); i >= 0 {
+		return strings.ToLower(address[:i]), address[i+3:], nil
+	}
+	return SchemeTCP, address, nil
 }
 
 func parse(opts []Option) *config {

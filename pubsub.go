@@ -92,12 +92,32 @@ func (ps *PubSub) Start() error {
 	}
 	ps.mutex.Unlock()
 
+	//Use 可能晚于 Subscribe（订阅常在包 init 里注册，传输层要到 Start 前才装配好），
+	//这些先注册的订阅走 Subscribe 时 transports 还是空的、没能转发出去，在这里补上。
+	topics := ps.topics()
 	for _, t := range ps.transports {
+		if len(topics) > 0 {
+			t.Subscribe(topics)
+		}
 		if err := t.Start(ps.receive); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// topics 当前已注册的全部订阅主题（含通配）
+func (ps *PubSub) topics() []string {
+	ps.mutex.Lock()
+	defer ps.mutex.Unlock()
+	r := make([]string, 0, len(ps.exact)+len(ps.wildcards))
+	for topic := range ps.exact {
+		r = append(r, topic)
+	}
+	for _, sub := range ps.wildcards {
+		r = append(r, sub.Topic)
+	}
+	return r
 }
 
 func (ps *PubSub) Close() error {

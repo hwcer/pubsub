@@ -207,12 +207,28 @@ func (t *ClientTransport) Publish(topic string, data []byte) error {
 }
 
 func (t *ClientTransport) Subscribe(topics []string) {
+	//去重：同一主题可能被订阅多次（PubSub.Start 会把已注册的主题补推一遍），
+	//重复项会在每次重连的 syncSubscriptions 里被原样重发
 	t.mu.Lock()
-	t.topics = append(t.topics, topics...)
+	exist := make(map[string]bool, len(t.topics))
+	for _, topic := range t.topics {
+		exist[topic] = true
+	}
+	added := make([]string, 0, len(topics))
+	for _, topic := range topics {
+		if !exist[topic] {
+			exist[topic] = true
+			t.topics = append(t.topics, topic)
+			added = append(added, topic)
+		}
+	}
 	t.mu.Unlock()
+	if len(added) == 0 {
+		return
+	}
 
 	t.sockets.Range(func(socket *cosnet.Socket) bool {
-		for _, topic := range topics {
+		for _, topic := range added {
 			_ = socket.Send(message.Flag(0), 0, pathSubscribe, subscriptionReq{Topic: topic})
 		}
 		return true

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,26 @@ func (t *Transport) channel(topic string) string {
 	return t.prefix + ":" + topic
 }
 
+// split 把订阅拆成精确频道与模式。
+//
+// redis 的 SUBSCRIBE 不做模式匹配，通配主题必须走 PSUBSCRIBE，否则会被当成
+// 一个字面带 * 的频道名，永远收不到消息。
+//
+// redis 的 glob 与 pubsub 的通配语义并不等价（glob 的 * 会跨越 . 分隔，
+// 比 pubsub 的 * 宽松），这里只求不漏：多收到的消息会在 pubsub.deliverLocal
+// 里按精确正则再过滤一次，只是多一点网络流量，不会误投递给订阅者。
+// 注意主题名里不要出现 redis glob 的元字符 ? [ ]。
+func (t *Transport) split(topics []string) (channels, patterns []string) {
+	for _, topic := range topics {
+		if strings.ContainsAny(topic, "*>") {
+			patterns = append(patterns, t.channel(strings.ReplaceAll(topic, ">", "*")))
+		} else {
+			channels = append(channels, t.channel(topic))
+		}
+	}
+	return
+}
+
 func (t *Transport) Start(receiver func(string, []byte)) error {
 	t.receiver = receiver
 	ctx, cancel := context.WithCancel(context.Background())
@@ -56,14 +77,21 @@ func (t *Transport) Start(receiver func(string, []byte)) error {
 	t.sub = t.client.Subscribe(ctx)
 
 	t.mu.Lock()
-	channels := make([]string, 0, len(t.topics))
+	topics := make([]string, 0, len(t.topics))
 	for topic := range t.topics {
-		channels = append(channels, t.channel(topic))
+		topics = append(topics, topic)
 	}
 	t.mu.Unlock()
 
+	channels, patterns := t.split(topics)
 	if len(channels) > 0 {
 		if err := t.sub.Subscribe(ctx, channels...); err != nil {
+			cancel()
+			return err
+		}
+	}
+	if len(patterns) > 0 {
+		if err := t.sub.PSubscribe(ctx, patterns...); err != nil {
 			cancel()
 			return err
 		}
@@ -100,11 +128,13 @@ func (t *Transport) Subscribe(topics []string) {
 	t.mu.Unlock()
 
 	if t.sub != nil {
-		channels := make([]string, len(topics))
-		for i, topic := range topics {
-			channels[i] = t.channel(topic)
+		channels, patterns := t.split(topics)
+		if len(channels) > 0 {
+			_ = t.sub.Subscribe(context.Background(), channels...)
 		}
-		t.sub.Subscribe(context.Background(), channels...)
+		if len(patterns) > 0 {
+			_ = t.sub.PSubscribe(context.Background(), patterns...)
+		}
 	}
 }
 
@@ -116,11 +146,13 @@ func (t *Transport) Unsubscribe(topics []string) {
 	t.mu.Unlock()
 
 	if t.sub != nil {
-		channels := make([]string, len(topics))
-		for i, topic := range topics {
-			channels[i] = t.channel(topic)
+		channels, patterns := t.split(topics)
+		if len(channels) > 0 {
+			_ = t.sub.Unsubscribe(context.Background(), channels...)
 		}
-		t.sub.Unsubscribe(context.Background(), channels...)
+		if len(patterns) > 0 {
+			_ = t.sub.PUnsubscribe(context.Background(), patterns...)
+		}
 	}
 }
 

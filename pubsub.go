@@ -2,6 +2,8 @@ package pubsub
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
 	"sync"
 )
@@ -15,6 +17,9 @@ type subscription struct {
 // DefaultQueueSize 远程消息队列的默认容量
 const DefaultQueueSize = 256
 
+// ErrQueueFull 远程消息队列已满，当前消息被丢弃
+var ErrQueueFull = errors.New("pubsub: queue is full")
+
 // PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层
 // 使用 COW 模式优化读取性能
 type PubSub struct {
@@ -24,8 +29,9 @@ type PubSub struct {
 	wildcards  []*subscription
 	queue      chan *Event
 	done       chan struct{}
+	started    bool
 	closed     bool
-	dropped    func(topic string, data []byte)
+	dropped    func(topic string, data []byte, reason error)
 }
 
 func New() *PubSub {
@@ -50,18 +56,25 @@ func (ps *PubSub) SetQueue(size int) {
 	ps.queue = make(chan *Event, size)
 }
 
-// OnDropped 队列满时的回调，用于告警。本包不引入日志依赖，交由调用方处理。
-// 必须在 Start 之前设置。
-func (ps *PubSub) OnDropped(f func(topic string, data []byte)) {
+// OnDropped 远程消息未能投递时的回调，用于告警。本包不引入日志依赖，交由调用方处理。
+// reason 区分丢弃原因（ErrQueueFull 或订阅回调 panic），必须在 Start 之前设置。
+func (ps *PubSub) OnDropped(f func(topic string, data []byte, reason error)) {
 	ps.dropped = f
 }
 
 func (ps *PubSub) Start() error {
-	if len(ps.transports) == 0 {
-		return nil //纯本地模式没有远程消息，不需要投递协程
+	ps.mutex.Lock()
+	if ps.started {
+		ps.mutex.Unlock()
+		return nil //重复 Start 会起出多个投递协程，破坏按序投递
 	}
-	ps.done = make(chan struct{})
-	go ps.dispatch() //必须先起消费协程，再启动传输层
+	ps.started = true
+	if len(ps.transports) > 0 {
+		ps.done = make(chan struct{})
+		go ps.dispatch() //必须先起消费协程，再启动传输层
+	}
+	ps.mutex.Unlock()
+
 	for _, t := range ps.transports {
 		if err := t.Start(ps.receive); err != nil {
 			return err
@@ -105,7 +118,7 @@ func (ps *PubSub) dispatch() {
 func (ps *PubSub) deliverSafe(event *Event) {
 	defer func() {
 		if e := recover(); e != nil && ps.dropped != nil {
-			ps.dropped(event.Topic, event.data)
+			ps.dropped(event.Topic, event.data, fmt.Errorf("pubsub: handler panic: %v", e))
 		}
 	}()
 	ps.deliverLocal(event.Topic, event)
@@ -184,7 +197,7 @@ func (ps *PubSub) receive(topic string, data []byte) {
 	case ps.queue <- event:
 	default:
 		if ps.dropped != nil {
-			ps.dropped(topic, data)
+			ps.dropped(topic, data, ErrQueueFull)
 		}
 	}
 }

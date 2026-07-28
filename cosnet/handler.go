@@ -7,13 +7,18 @@ import (
 const (
 	socketDataKeySubscriptions = "subscriptions"
 
-	basePath           = "/pubsub"
-	pathSubscribe      = basePath + "/subscribe"
-	pathBatchSubscribe = basePath + "/batch_subscribe"
-	pathUnsubscribe    = basePath + "/unsubscribe"
-	pathPublish        = basePath + "/publish"
-	pathMessage        = basePath + "/message"
-	pathPing           = basePath + "/ping"
+	basePath = "/pubsub"
+	//路径必须等于 basePath + "/" + strings.ToLower(处理器方法名)：
+	//handler 是用 Register(..., basePath, "%m") 按方法名注册的，
+	//而 registry.Formatter 是 strings.ToLower，不会插下划线。
+	//写成 /batch_subscribe 会落到无 handler 的路径被静默丢弃（订阅永远同步不上去）。
+	//改这里的同时必须同步改对应方法名，有 TestPathMatchesMethodName 兜底。
+	pathSubscribe      = basePath + "/subscribe"      //serverHandler.Subscribe
+	pathBatchSubscribe = basePath + "/batchsubscribe" //serverHandler.BatchSubscribe
+	pathUnsubscribe    = basePath + "/unsubscribe"    //serverHandler.Unsubscribe
+	pathPublish        = basePath + "/publish"        //serverHandler.Publish
+	pathPing           = basePath + "/ping"           //serverHandler.Ping / clientHandler.Ping
+	pathMessage        = basePath + "/message"        //clientHandler.Message
 )
 
 // pingReq 心跳包，不携带内容

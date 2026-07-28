@@ -12,6 +12,9 @@ type subscription struct {
 	Handlers []Handler
 }
 
+// DefaultQueueSize 远程消息队列的默认容量
+const DefaultQueueSize = 256
+
 // PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层
 // 使用 COW 模式优化读取性能
 type PubSub struct {
@@ -19,12 +22,17 @@ type PubSub struct {
 	transports []Transport
 	exact      map[string]*subscription
 	wildcards  []*subscription
+	queue      chan *Event
+	done       chan struct{}
+	closed     bool
+	dropped    func(topic string, data []byte)
 }
 
 func New() *PubSub {
 	return &PubSub{
 		exact:     make(map[string]*subscription),
 		wildcards: make([]*subscription, 0),
+		queue:     make(chan *Event, DefaultQueueSize),
 	}
 }
 
@@ -33,7 +41,27 @@ func (ps *PubSub) Use(t Transport) {
 	ps.transports = append(ps.transports, t)
 }
 
+// SetQueue 设置远程消息队列容量，必须在 Start 之前调用。
+// 详见 receive 上的说明：这个队列是用来把订阅回调从传输层的网络读协程上摘开的。
+func (ps *PubSub) SetQueue(size int) {
+	if size <= 0 {
+		size = 1
+	}
+	ps.queue = make(chan *Event, size)
+}
+
+// OnDropped 队列满时的回调，用于告警。本包不引入日志依赖，交由调用方处理。
+// 必须在 Start 之前设置。
+func (ps *PubSub) OnDropped(f func(topic string, data []byte)) {
+	ps.dropped = f
+}
+
 func (ps *PubSub) Start() error {
+	if len(ps.transports) == 0 {
+		return nil //纯本地模式没有远程消息，不需要投递协程
+	}
+	ps.done = make(chan struct{})
+	go ps.dispatch() //必须先起消费协程，再启动传输层
 	for _, t := range ps.transports {
 		if err := t.Start(ps.receive); err != nil {
 			return err
@@ -43,6 +71,15 @@ func (ps *PubSub) Start() error {
 }
 
 func (ps *PubSub) Close() error {
+	ps.mutex.Lock()
+	if !ps.closed {
+		ps.closed = true
+		if ps.done != nil {
+			close(ps.done)
+		}
+	}
+	ps.mutex.Unlock()
+
 	var last error
 	for _, t := range ps.transports {
 		if err := t.Close(); err != nil {
@@ -50,6 +87,28 @@ func (ps *PubSub) Close() error {
 		}
 	}
 	return last
+}
+
+// dispatch 远程消息的投递协程，单消费者保证事件按到达顺序处理
+func (ps *PubSub) dispatch() {
+	for {
+		select {
+		case <-ps.done:
+			return
+		case event := <-ps.queue:
+			ps.deliverSafe(event)
+		}
+	}
+}
+
+// deliverSafe 订阅回调 panic 不能带走投递协程，否则后续事件永久停摆
+func (ps *PubSub) deliverSafe(event *Event) {
+	defer func() {
+		if e := recover(); e != nil && ps.dropped != nil {
+			ps.dropped(event.Topic, event.data)
+		}
+	}()
+	ps.deliverLocal(event.Topic, event)
 }
 
 func (ps *PubSub) Subscribe(topic string, handler Handler) {
@@ -112,10 +171,22 @@ func (ps *PubSub) Publish(topic string, payload any) {
 	}
 }
 
-// receive 传输层回调，将远程消息分发给本地订阅者
+// receive 传输层回调，将远程消息分发给本地订阅者。
+//
+// 只入队，绝不在这里直接调订阅回调：所有传输层都是从自己的网络读协程调本函数的
+// （cosnet 是 socket 的 readMsg 循环，redis 是 listen 协程），在订阅回调里做耗时
+// 操作会把那条读协程卡住——cosnet 会因为读不到心跳被误判掉线、后续消息全堵在 TCP
+// 缓冲里，redis 则会因为消费不及让 go-redis 的缓冲塞满、超时后直接丢消息。
+// 队列满时宁可丢当前这条并告警，也不能反压回读协程。
 func (ps *PubSub) receive(topic string, data []byte) {
 	event := newRemoteEvent(topic, data)
-	ps.deliverLocal(topic, event)
+	select {
+	case ps.queue <- event:
+	default:
+		if ps.dropped != nil {
+			ps.dropped(topic, data)
+		}
+	}
 }
 
 func (ps *PubSub) deliverLocal(topic string, event *Event) {

@@ -2,8 +2,6 @@ package pubsub
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"regexp"
 	"sync"
 )
@@ -17,8 +15,11 @@ type subscription struct {
 // DefaultQueueSize 远程消息队列的默认容量
 const DefaultQueueSize = 256
 
-// ErrQueueFull 远程消息队列已满，当前消息被丢弃
-var ErrQueueFull = errors.New("pubsub: queue is full")
+// Logger 日志输出接口。本包不引入日志依赖，由调用方注入实现，
+// 未注入时相关信息静默丢弃。
+type Logger interface {
+	Errorf(format string, args ...any)
+}
 
 // PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层
 // 使用 COW 模式优化读取性能
@@ -31,7 +32,7 @@ type PubSub struct {
 	done       chan struct{}
 	started    bool
 	closed     bool
-	dropped    func(event *Event, reason error)
+	logger     Logger
 }
 
 func New() *PubSub {
@@ -56,10 +57,16 @@ func (ps *PubSub) SetQueue(size int) {
 	ps.queue = make(chan *Event, size)
 }
 
-// OnDropped 远程消息未能投递时的回调，用于告警。本包不引入日志依赖，交由调用方处理。
-// reason 为 ErrQueueFull 或订阅回调的 panic，必须在 Start 之前设置。
-func (ps *PubSub) OnDropped(f func(event *Event, reason error)) {
-	ps.dropped = f
+// SetLogger 注入日志实现，用于输出远程消息投递失败（队列满、订阅回调 panic）等信息。
+// 必须在 Start 之前设置。
+func (ps *PubSub) SetLogger(l Logger) {
+	ps.logger = l
+}
+
+func (ps *PubSub) errorf(format string, args ...any) {
+	if ps.logger != nil {
+		ps.logger.Errorf(format, args...)
+	}
 }
 
 func (ps *PubSub) Start() error {
@@ -117,8 +124,8 @@ func (ps *PubSub) dispatch() {
 // deliverSafe 订阅回调 panic 不能带走投递协程，否则后续事件永久停摆
 func (ps *PubSub) deliverSafe(event *Event) {
 	defer func() {
-		if e := recover(); e != nil && ps.dropped != nil {
-			ps.dropped(event, fmt.Errorf("pubsub: handler panic: %v", e))
+		if e := recover(); e != nil {
+			ps.errorf("pubsub: handler panic, topic:%v, error:%v", event.Topic, e)
 		}
 	}()
 	ps.deliverLocal(event.Topic, event)
@@ -196,9 +203,7 @@ func (ps *PubSub) receive(topic string, data []byte) {
 	select {
 	case ps.queue <- event:
 	default:
-		if ps.dropped != nil {
-			ps.dropped(event, ErrQueueFull)
-		}
+		ps.errorf("pubsub: queue is full, message dropped, topic:%v", topic)
 	}
 }
 

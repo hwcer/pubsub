@@ -17,7 +17,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hwcer/cosgo v1.8.3-0.20260604075126-0f2a31620eb1 // indirect
-	github.com/hwcer/cosnet v1.4.5-0.20260728110732-a1aab646ce2e // indirect
+	github.com/hwcer/cosnet v1.4.5-0.20260731031621-1c4a7ba7ba4b // indirect
 	github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect

@@ -6,11 +6,11 @@ go 1.25.0
 // require 的真实版本。本地要同时改核心包与本子模块时用 go work,不要把 replace 写回。
 require (
 	github.com/hwcer/cosgo v1.8.3-0.20260604075126-0f2a31620eb1
-	github.com/hwcer/cosnet v1.4.5-0.20260728110732-a1aab646ce2e
+	github.com/hwcer/cosnet v1.4.5-0.20260731031621-1c4a7ba7ba4b
 	github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc
 )
 
-require github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245
+require github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245 // indirect
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

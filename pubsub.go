@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"encoding/json"
+	"maps"
 	"regexp"
 	"sync"
 
@@ -40,6 +41,7 @@ type PubSub struct {
 	queue      chan *Event
 	done       chan struct{}
 	started    bool
+	startErr   error //首次Start失败的原因,重复Start时如实返回
 	closed     bool
 	logger     Logger
 }
@@ -82,8 +84,11 @@ func (ps *PubSub) errorf(format string, args ...any) {
 func (ps *PubSub) Start() error {
 	ps.mutex.Lock()
 	if ps.started {
+		err := ps.startErr
 		ps.mutex.Unlock()
-		return nil //重复 Start 会起出多个投递协程，破坏按序投递
+		//重复 Start 会起出多个投递协程，破坏按序投递;
+		//上次失败过则如实返回错误,而不是静默假装成功
+		return err
 	}
 	ps.started = true
 	if len(ps.transports) > 0 {
@@ -100,6 +105,9 @@ func (ps *PubSub) Start() error {
 			t.Subscribe(topics)
 		}
 		if err := t.Start(ps.receive); err != nil {
+			ps.mutex.Lock()
+			ps.startErr = err
+			ps.mutex.Unlock()
 			return err
 		}
 	}
@@ -208,15 +216,20 @@ func (ps *PubSub) Unsubscribe(topic string) {
 // Publish 发布消息：先本地分发，再通过传输层远程分发
 func (ps *PubSub) Publish(topic string, payload any) {
 	event := newLocalEvent(topic, payload)
-	ps.deliverLocal(topic, event)
+	//本地回调同样可能panic,不能带走发布方(常在网络读协程中调用),与远程路径口径一致
+	ps.deliverSafe(event)
 
 	if len(ps.transports) > 0 {
 		data, err := json.Marshal(payload)
 		if err != nil {
+			ps.errorf("pubsub: payload marshal failed, topic:%v, error:%v", topic, err)
 			return
 		}
 		for _, t := range ps.transports {
-			t.Publish(topic, data)
+			if err := t.Publish(topic, data); err != nil {
+				//远程分发失败(如断连)不应静默丢消息,至少留下日志
+				ps.errorf("pubsub: transport publish failed, topic:%v, error:%v", topic, err)
+			}
 		}
 	}
 }
@@ -274,9 +287,7 @@ func (ps *PubSub) getOrCreate(topic string) *subscription {
 	}
 	sub := &subscription{Topic: topic}
 	newExact := make(map[string]*subscription, len(ps.exact)+1)
-	for k, v := range ps.exact {
-		newExact[k] = v
-	}
+	maps.Copy(newExact, ps.exact)
 	newExact[topic] = sub
 	ps.exact = newExact
 	return sub

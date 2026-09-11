@@ -4,15 +4,19 @@ import (
 	"encoding/json"
 	"maps"
 	"regexp"
+	"sync/atomic"
 	"sync"
 
 	"github.com/hwcer/logger"
 )
 
 type subscription struct {
-	Topic    string
-	Pattern  *regexp.Regexp // 通配符预编译正则，精确匹配时为 nil
-	Handlers []Handler
+	Topic   string
+	Pattern *regexp.Regexp // 通配符预编译正则，精确匹配时为 nil
+	// handlers COW:读侧(deliverLocal,发布热路径)无锁原子 Load,
+	// 写侧(Subscribe)持 ps.mutex 克隆后整体 Store——裸 slice 与并发 append
+	// 是数据竞争(slice header 撕裂),判据:字段发布必须原子
+	handlers atomic.Pointer[[]Handler]
 }
 
 // DefaultQueueSize 远程消息队列的默认容量
@@ -31,13 +35,15 @@ func (defaultLogger) Error(format any, args ...any) {
 	logger.Error(format, args...)
 }
 
-// PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层
-// 使用 COW 模式优化读取性能
+// PubSub 事件总线，支持本地发布/订阅和可插拔的远程传输层。
+// exact/wildcards 走 COW+原子发布:deliverLocal 在发布热路径上无锁读,
+// Subscribe/Unsubscribe 持 mutex 整体换指针。裸字段读与并发重赋
+// 是数据竞争——"COW"必须包含原子的发布步,光换指针不够(判据:写侧 atomic)。
 type PubSub struct {
 	mutex      sync.Mutex
 	transports []Transport
-	exact      map[string]*subscription
-	wildcards  []*subscription
+	exact      atomic.Pointer[map[string]*subscription]
+	wildcards  atomic.Pointer[[]*subscription]
 	queue      chan *Event
 	done       chan struct{}
 	started    bool
@@ -47,12 +53,13 @@ type PubSub struct {
 }
 
 func New() *PubSub {
-	return &PubSub{
-		exact:     make(map[string]*subscription),
-		wildcards: make([]*subscription, 0),
-		queue:     make(chan *Event, DefaultQueueSize),
-		logger:    defaultLogger{},
+	ps := &PubSub{
+		queue:  make(chan *Event, DefaultQueueSize),
+		logger: defaultLogger{},
 	}
+	ps.exact.Store(&map[string]*subscription{})
+	ps.wildcards.Store(&[]*subscription{})
+	return ps
 }
 
 // Use 注册传输层，必须在 Start 之前调用
@@ -116,13 +123,13 @@ func (ps *PubSub) Start() error {
 
 // topics 当前已注册的全部订阅主题（含通配）
 func (ps *PubSub) topics() []string {
-	ps.mutex.Lock()
-	defer ps.mutex.Unlock()
-	r := make([]string, 0, len(ps.exact)+len(ps.wildcards))
-	for topic := range ps.exact {
+	exact := ps.exact.Load()
+	wildcards := ps.wildcards.Load()
+	r := make([]string, 0, len(*exact)+len(*wildcards))
+	for topic := range *exact {
 		r = append(r, topic)
 	}
-	for _, sub := range ps.wildcards {
+	for _, sub := range *wildcards {
 		r = append(r, sub.Topic)
 	}
 	return r
@@ -172,7 +179,11 @@ func (ps *PubSub) deliverSafe(event *Event) {
 func (ps *PubSub) Subscribe(topic string, handler Handler) {
 	ps.mutex.Lock()
 	sub := ps.getOrCreate(topic)
-	sub.Handlers = append(sub.Handlers, handler)
+	old := sub.handlers.Load()
+	next := make([]Handler, 0, len(*old)+1)
+	next = append(next, *old...)
+	next = append(next, handler)
+	sub.handlers.Store(&next)
 	ps.mutex.Unlock()
 
 	if len(ps.transports) > 0 {
@@ -187,23 +198,25 @@ func (ps *PubSub) Unsubscribe(topic string) {
 	defer ps.mutex.Unlock()
 
 	if isWildcard(topic) {
-		for i, sub := range ps.wildcards {
+		old := ps.wildcards.Load()
+		for i, sub := range *old {
 			if sub.Topic == topic {
-				newSubs := make([]*subscription, 0, len(ps.wildcards)-1)
-				newSubs = append(newSubs, ps.wildcards[:i]...)
-				newSubs = append(newSubs, ps.wildcards[i+1:]...)
-				ps.wildcards = newSubs
+				newSubs := make([]*subscription, 0, len(*old)-1)
+				newSubs = append(newSubs, (*old)[:i]...)
+				newSubs = append(newSubs, (*old)[i+1:]...)
+				ps.wildcards.Store(&newSubs)
 				break
 			}
 		}
-	} else if _, ok := ps.exact[topic]; ok {
-		newExact := make(map[string]*subscription, len(ps.exact)-1)
-		for k, v := range ps.exact {
+	} else if _, ok := (*ps.exact.Load())[topic]; ok {
+		old := ps.exact.Load()
+		newExact := make(map[string]*subscription, len(*old)-1)
+		for k, v := range *old {
 			if k != topic {
 				newExact[k] = v
 			}
 		}
-		ps.exact = newExact
+		ps.exact.Store(&newExact)
 	}
 
 	if len(ps.transports) > 0 {
@@ -251,17 +264,17 @@ func (ps *PubSub) receive(topic string, data []byte) {
 }
 
 func (ps *PubSub) deliverLocal(topic string, event *Event) {
-	exact := ps.exact
-	wildcards := ps.wildcards
+	exact := ps.exact.Load()
+	wildcards := ps.wildcards.Load()
 
-	if sub, ok := exact[topic]; ok {
-		for _, handler := range sub.Handlers {
+	if sub, ok := (*exact)[topic]; ok {
+		for _, handler := range *sub.handlers.Load() {
 			handler(event)
 		}
 	}
-	for _, sub := range wildcards {
+	for _, sub := range *wildcards {
 		if sub.Pattern.MatchString(topic) {
-			for _, handler := range sub.Handlers {
+			for _, handler := range *sub.handlers.Load() {
 				handler(event)
 			}
 		}
@@ -269,51 +282,55 @@ func (ps *PubSub) deliverLocal(topic string, event *Event) {
 }
 
 func (ps *PubSub) getOrCreate(topic string) *subscription {
+	wildcards := ps.wildcards.Load()
 	if isWildcard(topic) {
-		for _, sub := range ps.wildcards {
+		for _, sub := range *wildcards {
 			if sub.Topic == topic {
 				return sub
 			}
 		}
 		sub := &subscription{Topic: topic, Pattern: compileWildcard(topic)}
-		newSubs := make([]*subscription, len(ps.wildcards)+1)
-		copy(newSubs, ps.wildcards)
-		newSubs[len(ps.wildcards)] = sub
-		ps.wildcards = newSubs
+		sub.handlers.Store(&[]Handler{})
+		newSubs := make([]*subscription, len(*wildcards)+1)
+		copy(newSubs, *wildcards)
+		newSubs[len(*wildcards)] = sub
+		ps.wildcards.Store(&newSubs)
 		return sub
 	}
-	if sub, ok := ps.exact[topic]; ok {
+	exact := ps.exact.Load()
+	if sub, ok := (*exact)[topic]; ok {
 		return sub
 	}
 	sub := &subscription{Topic: topic}
-	newExact := make(map[string]*subscription, len(ps.exact)+1)
-	maps.Copy(newExact, ps.exact)
+	sub.handlers.Store(&[]Handler{})
+	newExact := make(map[string]*subscription, len(*exact)+1)
+	maps.Copy(newExact, *exact)
 	newExact[topic] = sub
-	ps.exact = newExact
+	ps.exact.Store(&newExact)
 	return sub
 }
 
 func (ps *PubSub) GetSubscriptions() []string {
-	exact := ps.exact
-	wildcards := ps.wildcards
-	topics := make([]string, 0, len(exact)+len(wildcards))
-	for topic := range exact {
+	exact := ps.exact.Load()
+	wildcards := ps.wildcards.Load()
+	topics := make([]string, 0, len(*exact)+len(*wildcards))
+	for topic := range *exact {
 		topics = append(topics, topic)
 	}
-	for _, sub := range wildcards {
+	for _, sub := range *wildcards {
 		topics = append(topics, sub.Topic)
 	}
 	return topics
 }
 
 func (ps *PubSub) GetSubscriberCount(topic string) int {
-	exact := ps.exact
-	wildcards := ps.wildcards
+	exact := ps.exact.Load()
+	wildcards := ps.wildcards.Load()
 	count := 0
-	if _, ok := exact[topic]; ok {
+	if _, ok := (*exact)[topic]; ok {
 		count++
 	}
-	for _, sub := range wildcards {
+	for _, sub := range *wildcards {
 		if sub.Topic == topic {
 			count++
 			break

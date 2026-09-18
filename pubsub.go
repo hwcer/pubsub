@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"maps"
 	"regexp"
-	"sync/atomic"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hwcer/logger"
 )

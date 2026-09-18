@@ -2,9 +2,9 @@ package pubsub
 
 import (
 	"sync"
-	"time"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestLocalDeliverExactAndWildcard 本地分发语义:精确命中 + 通配命中
@@ -110,10 +110,10 @@ func (f *fakeTransport) Start(receiver func(topic string, data []byte)) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeTransport) Close() error                       { return nil }
+func (f *fakeTransport) Close() error                            { return nil }
 func (f *fakeTransport) Publish(topic string, data []byte) error { return nil }
-func (f *fakeTransport) Subscribe(topics []string)          {}
-func (f *fakeTransport) Unsubscribe(topics []string)        {}
+func (f *fakeTransport) Subscribe(topics []string)               {}
+func (f *fakeTransport) Unsubscribe(topics []string)             {}
 
 // TestRemoteReceiveQueued 远程路径:receive 只入队,dispatch 异步投递给订阅者。
 // 没有 transport 时 Start 不起投递协程,必须有 transport 才走通这条路

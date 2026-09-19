@@ -30,7 +30,11 @@ func compileWildcard(topic string) *regexp.Regexp {
 	}
 	pattern := "^" + regexp.QuoteMeta(topic) + "$"
 	pattern = strings.ReplaceAll(pattern, `\*`, `[^.]+`)
-	pattern = strings.ReplaceAll(pattern, `\>`, `.+`)
+	//🔴 裸 > 匹配裸字符:regexp.QuoteMeta 不转义 >(只转义 .+*?()|[]{}^$),
+	//模式里是裸 >,旧实现 ReplaceAll(pattern, `\>`, ...) 永远匹配不上——
+	//订阅 a.> 的 socket 编译出 ^a\.>$ 只匹配字面量,服务端 > 通配整体失效。
+	//与核心包 wildcard.go 同一修复(两份实现曾漂移)
+	pattern = strings.ReplaceAll(pattern, `>`, `.+`)
 	re := regexp.MustCompile(pattern)
 	wildcardCache.Store(topic, re)
 	return re

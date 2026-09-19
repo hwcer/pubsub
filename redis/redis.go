@@ -50,31 +50,26 @@ func (t *Transport) channel(topic string) string {
 	return t.prefix + ":" + topic
 }
 
-// split 把订阅拆成精确频道与模式。
+// pattern 把主题转为 redis 的 PSUBSCRIBE 模式。
 //
-// redis 的 SUBSCRIBE 不做模式匹配，通配主题必须走 PSUBSCRIBE，否则会被当成
-// 一个字面带 * 的频道名，永远收不到消息。
-//
-// redis 的 glob 与 pubsub 的通配语义并不等价（glob 的 * 会跨越 . 分隔，
-// 比 pubsub 的 * 宽松），这里只求不漏：多收到的消息会在 pubsub.deliverLocal
-// 里按精确正则再过滤一次，只是多一点网络流量，不会误投递给订阅者。
+// 🔴 统一单通道 PSubscribe(精确主题即字面 pattern)。redis 对同一消息同时命中
+// SUBSCRIBE 与 PSUBSCRIBE 时会各投一次:旧实现精确走 SUBSCRIBE、通配走 PSUBSCRIBE,
+// 同进程"精确 a.b + 通配 a.*"双订阅会收到重复投递;单通道后所有订阅同型,天然无重复。
+// 通配语义:pubsub 的 > 归一为 redis glob 的 *(宽松匹配),多收到的消息会在
+// pubsub.deliverLocal 里按精确正则再过滤一次,只是多一点流量,不会误投递。
 // 注意主题名里不要出现 redis glob 的元字符 ? [ ]。
-func (t *Transport) split(topics []string) (channels, patterns []string) {
-	for _, topic := range topics {
-		if strings.ContainsAny(topic, "*>") {
-			patterns = append(patterns, t.channel(strings.ReplaceAll(topic, ">", "*")))
-		} else {
-			channels = append(channels, t.channel(topic))
-		}
+func (t *Transport) pattern(topic string) string {
+	if strings.ContainsAny(topic, "*>") {
+		topic = strings.ReplaceAll(topic, ">", "*")
 	}
-	return
+	return t.channel(topic)
 }
 
 func (t *Transport) Start(receiver func(string, []byte)) error {
 	t.receiver = receiver
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
-	t.sub = t.client.Subscribe(ctx)
+	t.sub = t.client.PSubscribe(ctx)
 
 	t.mu.Lock()
 	topics := make([]string, 0, len(t.topics))
@@ -83,14 +78,11 @@ func (t *Transport) Start(receiver func(string, []byte)) error {
 	}
 	t.mu.Unlock()
 
-	channels, patterns := t.split(topics)
-	if len(channels) > 0 {
-		if err := t.sub.Subscribe(ctx, channels...); err != nil {
-			cancel()
-			return err
+	if len(topics) > 0 {
+		patterns := make([]string, 0, len(topics))
+		for _, topic := range topics {
+			patterns = append(patterns, t.pattern(topic))
 		}
-	}
-	if len(patterns) > 0 {
 		if err := t.sub.PSubscribe(ctx, patterns...); err != nil {
 			cancel()
 			return err
@@ -127,14 +119,12 @@ func (t *Transport) Subscribe(topics []string) {
 	}
 	t.mu.Unlock()
 
-	if t.sub != nil {
-		channels, patterns := t.split(topics)
-		if len(channels) > 0 {
-			_ = t.sub.Subscribe(context.Background(), channels...)
+	if t.sub != nil && len(topics) > 0 {
+		patterns := make([]string, 0, len(topics))
+		for _, topic := range topics {
+			patterns = append(patterns, t.pattern(topic))
 		}
-		if len(patterns) > 0 {
-			_ = t.sub.PSubscribe(context.Background(), patterns...)
-		}
+		_ = t.sub.PSubscribe(context.Background(), patterns...)
 	}
 }
 
@@ -145,45 +135,53 @@ func (t *Transport) Unsubscribe(topics []string) {
 	}
 	t.mu.Unlock()
 
-	if t.sub != nil {
-		channels, patterns := t.split(topics)
-		if len(channels) > 0 {
-			_ = t.sub.Unsubscribe(context.Background(), channels...)
+	if t.sub != nil && len(topics) > 0 {
+		patterns := make([]string, 0, len(topics))
+		for _, topic := range topics {
+			patterns = append(patterns, t.pattern(topic))
 		}
-		if len(patterns) > 0 {
-			_ = t.sub.PUnsubscribe(context.Background(), patterns...)
-		}
+		_ = t.sub.PUnsubscribe(context.Background(), patterns...)
 	}
 }
 
 func (t *Transport) listen(ctx context.Context) {
-	ch := t.sub.Channel()
-	prefixLen := 0
-	if t.prefix != "" {
-		prefixLen = len(t.prefix) + 1
-	}
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-ch:
-			if !ok {
-				return
-			}
-			var env envelope
-			if err := json.Unmarshal([]byte(msg.Payload), &env); err != nil {
-				continue
-			}
-			if env.Origin == t.id {
-				continue
-			}
-			topic := msg.Channel
-			if prefixLen > 0 && len(topic) > prefixLen {
-				topic = topic[prefixLen:]
-			}
-			if t.receiver != nil {
-				t.receiver(topic, env.Data)
-			}
+		//同步 Receive 循环:pmessage 回复由 go-redis 转为带 Pattern 的 *Message,
+		//Channel() 的内部通道虽也能转发,但缓冲满 60s 会静默丢消息,且拿不到
+		//Subscription 确认;同步循环直接消费,行为最透明
+		msg, err := t.sub.Receive(ctx)
+		if err != nil {
+			return //ctx 取消或连接关闭
 		}
+		var channel, payload string
+		switch m := msg.(type) {
+		case *redis.Message:
+			channel, payload = m.Channel, m.Payload
+		case *redis.Subscription, *redis.Pong:
+			continue //订阅确认/心跳
+		default:
+			continue
+		}
+		t.dispatch(channel, payload)
+	}
+}
+
+func (t *Transport) dispatch(channel, payload string) {
+	var env envelope
+	if err := json.Unmarshal([]byte(payload), &env); err != nil {
+		return
+	}
+	if env.Origin == t.id {
+		return
+	}
+	topic := channel
+	if t.prefix != "" {
+		prefixLen := len(t.prefix) + 1
+		if len(topic) > prefixLen {
+			topic = topic[prefixLen:]
+		}
+	}
+	if t.receiver != nil {
+		t.receiver(topic, env.Data)
 	}
 }

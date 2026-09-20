@@ -9,11 +9,12 @@ require (
 	github.com/hwcer/pubsub v0.0.0-20260728075544-f351c68a65dc
 )
 
+require github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245
+
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/hwcer/logger v0.2.9-0.20260626033726-42e0a5927245 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )

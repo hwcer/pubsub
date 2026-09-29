@@ -5,7 +5,7 @@ go 1.26.0
 // 不要在这里 replace 核心包:replace 只对主模块生效,下游 go get 时会忽略它并去解析
 // require 的真实版本。本地要同时改核心包与本子模块时用 go work,不要把 replace 写回。
 require (
-	github.com/hwcer/cosgo v1.8.4-0.20260928102218-22f89e4dbb23
+	github.com/hwcer/cosgo v1.8.4-0.20260929074315-7f81d5a19ba8
 	github.com/hwcer/cosnet v1.4.5-0.20260928125441-a4b473555ab4
 	github.com/hwcer/pubsub v0.0.0-20260920082343-816f154f6954
 )
